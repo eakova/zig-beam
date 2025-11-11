@@ -6,8 +6,10 @@ suites and (where relevant) micro-benchmarks. Run the commands below from
 `utils/`.
 
 ## Tagged Pointer
-Compact helper that stores a pointer and a 1-bit tag inside a single machine
-word; used to power Small Value Optimization (SVO) in ARC.
+Purpose
+- Pack a small tag into the low bits of a pointer (commonly used to flag variants)
+
+Commands
 
 ```bash
 zig test src/tagged-pointer/_tagged_pointer_unit_tests.zig
@@ -17,9 +19,21 @@ zig build test-tagged
 zig build samples-tagged
 ```
 
+Minimal example
+```zig
+const TaggedPointer = @import("zig_beam_utils").tagged_pointer.TaggedPointer;
+const Ptr = TaggedPointer(*usize, 1);
+var v: usize = 0;
+const bits = (try Ptr.new(&v, 1)).toUnsigned();
+const tagged = Ptr.fromUnsigned(bits);
+// tagged.getPtr() == &v, tagged.getTag() == 1
+```
+
 ## Thread-Local Cache
-Lock-free, per-thread cache layer that frontloads expensive pool operations and
-keeps allocation churn off the global allocator.
+Purpose
+- Lock-free, per-thread L1 cache that reduces allocator pressure and contention.
+
+Commands
 
 ```bash
 zig test src/thread-local-cache/_thread_local_cache_unit_tests.zig
@@ -34,9 +48,21 @@ zig build bench-tlc   # runs _thread_local_cache_benchmarks.zig and updates docs
 Docs
 - Report: [`utils/docs/thread_local_cache_benchmark_results.md`](../docs/thread_local_cache_benchmark_results.md)
 
+Minimal example
+```zig
+const Cache = @import("zig_beam_utils").thread_local_cache.ThreadLocalCache(*usize, null);
+var cache: Cache = .{};
+var x: usize = 1;
+_ = cache.push(&x);
+_ = cache.pop();
+cache.clear(null);
+```
+
 ## ARC Core
-Atomic reference-counted smart pointer (`Arc<T>`) plus optional weak handles and
-SVO support for tiny POD values.
+Purpose
+- Atomic reference counting, SVO for small data, weak references, and pooling support.
+
+Commands
 
 ```bash
 zig test src/arc/_arc_unit_tests.zig
@@ -52,6 +78,16 @@ ARC_BENCH_RUN_MT=1 zig build bench-arc  # also enables multi-thread benchmark
 Docs
 - Report: [`utils/docs/arc_benchmark_results.md`](../docs/arc_benchmark_results.md)
 - Dependency & interaction: [`utils/docs/dependency_graph.md`](../docs/dependency_graph.md)
+
+Minimal example
+```zig
+const Arc = @import("zig_beam_utils").arc.Arc(u64);
+var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+const alloc = gpa.allocator();
+var a = try Arc.init(alloc, 42); defer a.release();
+var b = a.clone(); defer b.release();
+// a.get().* == 42, b.get().* == 42
+```
 
 ## ARC Pool
 Multi-layer allocator (TLS cache + Treiber stack + allocator fallback) that
@@ -92,6 +128,12 @@ Windows (PowerShell):
 $env:ZIG_GLOBAL_CACHE_DIR = "$PWD/.zig-global-cache"
 $env:ZIG_LOCAL_CACHE_DIR  = "$PWD/.zig-local-cache"
 ```
+
+## Compatibility
+
+- OS: macOS, Linux, Windows
+- Zig: 0.15.x
+- Uses only standard library APIs (`std.Thread`, `std.time`, `std.fs`, `std.atomic`).
 
 ## Use `utils` In Your Project
 

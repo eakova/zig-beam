@@ -1,4 +1,8 @@
-# zig-beam Monorepo
+# Zig-Beam: Reusable building blocks for concurrent programming
+
+![Zig 0.15.x](https://img.shields.io/badge/Zig-0.15.x-blue)
+![License](https://img.shields.io/badge/license-TBD-lightgrey)
+![CI](https://github.com/eakova/zig-beam/actions/workflows/ci.yml/badge.svg)
 
 This repository hosts multiple Zig libraries under one roof. Each library can be used on its own or together via a common wrapper. The workspace is designed to be practical: every library ships with small samples, focused tests, and repeatable benchmarks.
 
@@ -7,7 +11,7 @@ This repository hosts multiple Zig libraries under one roof. Each library can be
 - Zig 0.15.x
 - macOS or Linux (multi-threaded tests/benchmarks rely on std.Thread)
 
-## Workspace Map
+## Libraries
 
 - `utils/` — Foundational utilities
   - Tagged pointer (bit-packed metadata)
@@ -18,7 +22,44 @@ This repository hosts multiple Zig libraries under one roof. Each library can be
 
 Each library folder keeps its own `build.zig`, `src/`, and `docs/` (for reports).
 
-## Quick Start
+Dependency graph/flow: [utils/docs/dependency_graph.md](utils/docs/dependency_graph.md)
+
+#### Tagged Pointer
+- Pack a small tag into a pointer’s low bits (common for lightweight flags)
+- Import: `zig_beam_utils.tagged_pointer`
+- Samples: `zig build samples-tagged`
+- Source: `utils/src/tagged-pointer/tagged_pointer.zig`
+- Bench: —
+
+#### Thread‑Local Cache
+- Per‑thread, lock‑free L1 pool to reduce allocator pressure and contention
+- Import: `zig_beam_utils.thread_local_cache`
+- Samples: `zig build samples-tlc`
+- Source: `utils/src/thread-local-cache/thread_local_cache.zig`
+- Bench: `zig build bench-tlc` [utils/docs/thread_local_cache_benchmark_results.md](utils/docs/thread_local_cache_benchmark_results.md)
+
+#### ARC
+- Atomic smart pointer with Small Value Optimization (SVO) and weak references
+- Import: `zig_beam_utils.arc`
+- Samples: `zig build samples-arc`
+- Source: `utils/src/arc/arc.zig`
+- Bench: `zig build bench-arc` [utils/docs/arc_benchmark_results.md](utils/docs/arc_benchmark_results.md)
+
+#### ARC Pool
+- Reuse `Arc<T>::Inner` allocations; fronted by a ThreadLocalCache and a global Treiber stack
+- Import: `zig_beam_utils.arc_pool`
+- Samples: (covered in ARC samples)
+- Source: `utils/src/arc/arc-pool/arc_pool.zig`
+- Bench: `zig build bench-arc` [utils/docs/arc_benchmark_results.md](utils/docs/arc_benchmark_results.md)
+
+#### Cycle Detector
+- Debug utility to find unreachable cycles of Arcs using a user‑provided trace function
+- Import: `zig_beam_utils.arc_cycle_detector`
+- Samples: —
+- Source: `utils/src/arc/cycle-detector/arc_cycle_detector.zig`
+- Bench: —
+
+## Usage
 
 Run from inside a library folder (e.g., `utils/`). The commands below refer to `utils/` as an example.
 
@@ -44,6 +85,41 @@ Windows (PowerShell):
 ```powershell
 $env:ZIG_GLOBAL_CACHE_DIR = "$PWD/.zig-global-cache"
 $env:ZIG_LOCAL_CACHE_DIR  = "$PWD/.zig-local-cache"
+```
+
+## Examples
+
+TaggedPointer (encode/decode):
+```zig
+const utils = @import("zig_beam_utils");
+const TaggedPointer = utils.tagged_pointer.TaggedPointer;
+const Ptr = TaggedPointer(*usize, 1);
+var x: usize = 123;
+const bits = (try Ptr.new(&x, 1)).toUnsigned();
+const decoded = Ptr.fromUnsigned(bits);
+// decoded.getPtr() == &x, decoded.getTag() == 1
+```
+
+Thread‑Local Cache (push/pop/clear):
+```zig
+const utils = @import("zig_beam_utils");
+const Cache = utils.thread_local_cache.ThreadLocalCache(*usize, null);
+var cache: Cache = .{};
+var v: usize = 1;
+_ = cache.push(&v);
+_ = cache.pop();
+cache.clear(null);
+```
+
+ARC (init/clone/release):
+```zig
+const utils = @import("zig_beam_utils");
+const Arc = utils.arc.Arc(u64);
+var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+const alloc = gpa.allocator();
+var a = try Arc.init(alloc, 42); defer a.release();
+var b = a.clone(); defer b.release();
+// a.get().* == 42, b.get().* == 42
 ```
 
 ## Use These Libraries In Your Project
@@ -151,13 +227,22 @@ The `utils` library groups several building blocks used together or separately.
 
 See `utils/README.md` for module-level details and commands.
 
-## Benchmarks (Policy)
+## Benchmarks
 
 - Default build: ReleaseFast
 - Iterations scale to keep total runtime under ~1 minute
 - Reports include machine info (OS, arch, build mode, pointer width, CPU count)
 - Console prints a short summary with a link to the Markdown report
 - Multi-thread runs are opt-in via an environment variable (e.g., `ARC_BENCH_RUN_MT=1`)
+
+## Compatibility
+
+OS support: macOS, Linux, Windows
+- Uses only Zig std APIs (`std.Thread`, `std.time`, `std.fs`, `std.atomic`).
+- If system caches are locked down, use the local cache variables above (bash/zsh or PowerShell).
+- Cross-compiling: use `-Dtarget` if you need artifacts for another OS/arch.
+
+Zig version policy: pinned to 0.15.x.
 
 ## Layout Conventions
 
@@ -185,13 +270,29 @@ See `utils/README.md` for module-level details and commands.
 - Upgrades: document in this file when bumping Zig or making breaking API changes
 - Versioning: each library can tag releases independently
 
-## CI Suggestions
+## CI
 
 - Build matrix: Zig (pinned + next), OS (macOS, Linux)
 - Jobs:
   - Build + test for each library
   - Run samples (smoke check)
-  - Run benchmarks (ReleaseFast, quick mode) and publish Markdown reports
+- Run benchmarks (ReleaseFast, quick mode) and publish Markdown reports
+
+## Contributing
+
+Contributions are welcome in the form of issues, PRs, and feedback. Please include:
+- Zig version
+- OS/arch
+- Exact build command
+- A minimal snippet or path to a failing sample/test
+
+Good first steps:
+- File a bug or feature request: https://github.com/eakova/zig-beam/issues/new
+- Propose improvements to samples/bench docs or add a new small sample
+
+## License
+
+TBD (e.g., MIT/Apache‑2.0 dual license). Some subfolders may add extra notices if required.
 
 ## Support
 
