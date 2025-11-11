@@ -17,6 +17,13 @@ pub fn exampleDecodePointer(bits: usize) struct { ptr: *Block, kind: u1 } {
     return .{ .ptr = tagged.getPtr(), .kind = @intCast(tagged.getTag()) };
 }
 
+pub fn main() !void {
+    var block = Block{ .payload = 42 };
+    const encoded = try exampleEncodePointer(&block, 1);
+    const decoded = exampleDecodePointer(encoded);
+    std.debug.print("Tagged pointer sample -> payload={}, kind={}\n", .{ decoded.ptr.payload, decoded.kind });
+}
+
 test "sample: encode + decode" {
     var block = Block{ .payload = 11 };
     const ptr: *Block = &block;

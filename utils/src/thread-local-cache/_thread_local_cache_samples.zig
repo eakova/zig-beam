@@ -37,8 +37,8 @@ pub fn example() !void {
 
     var cache: NodeCache = .{};
 
-    var a = try allocator.create(Node);
-    var b = try allocator.create(Node);
+    const a = try allocator.create(Node);
+    const b = try allocator.create(Node);
     a.* = .{ .value = 1 };
     b.* = .{ .value = 2 };
 
@@ -63,4 +63,8 @@ pub fn example() !void {
         const node = pool.store.pop();
         allocator.destroy(node);
     }
+}
+
+pub fn main() !void {
+    try example();
 }

@@ -19,7 +19,6 @@ const Thread = std.Thread;
 const atomic = std.atomic;
 const builtin = @import("builtin");
 
-// Assuming these are in separate, correctly named files
 const Arc = @import("arc_core").Arc;
 const ThreadLocalCache = @import("thread_local_cache").ThreadLocalCache;
 

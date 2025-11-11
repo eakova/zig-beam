@@ -52,6 +52,9 @@ fn recycleAtomic(ctx: ?*anyopaque, ptr: *Obj) void {
 const CacheAtomic = cache_mod.ThreadLocalCache(*Obj, recycleAtomic);
 threadlocal var tls_cache_atomic: CacheAtomic = .{};
 
+const CacheNoCb = cache_mod.ThreadLocalCache(*Obj, null);
+threadlocal var tls_cache_no_cb: CacheNoCb = .{};
+
 fn workerThread(ctx: *anyopaque) void {
     const recycled: *AtomicUsize = @ptrCast(@alignCast(ctx));
 
@@ -116,4 +119,38 @@ test "multithreaded: overflow pushes limited to per-thread capacity" {
 
     const total_success = successes.load(.seq_cst);
     try std.testing.expectEqual(@as(usize, 4 * Cache.capacity), total_success);
+}
+
+fn workerChurn(iterations: usize, counter: *AtomicUsize) void {
+    var objs: [CacheNoCb.capacity]Obj = undefined;
+    for (&objs, 0..) |*o, i| o.* = .{ .id = i };
+
+    var successes: usize = 0;
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        _ = tls_cache_no_cb.pop();
+        const ptr = &objs[i % objs.len];
+        if (!tls_cache_no_cb.push(ptr)) @panic("cache should never be full in churn worker");
+        if (tls_cache_no_cb.pop() != null) successes += 1;
+    }
+    _ = counter.fetchAdd(successes, .seq_cst);
+    tls_cache_no_cb.clear(null);
+}
+
+// Scenario: Mixed push/pop loops stay thread-local
+//
+// Setup: Each thread repeatedly performs push+pop pairs on its own cache.
+// Expect: Every iteration succeeds (total successes == threads * iterations).
+test "multithreaded: push/pop churn is isolated per thread" {
+    var successes = AtomicUsize.init(0);
+    const iterations: usize = 50_000;
+
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, workerChurn, .{ iterations, &successes });
+    }
+    for (&threads) |*t| t.join();
+
+    const total = successes.load(.seq_cst);
+    try std.testing.expectEqual(@as(usize, 4 * iterations), total);
 }

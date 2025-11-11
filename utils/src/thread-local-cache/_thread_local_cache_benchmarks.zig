@@ -180,6 +180,19 @@ fn bench_push_overflow(attempts: usize) !Metrics {
     return .{ .total_ops = attempts, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
 }
 
+fn bench_pop_miss(iterations: usize) !Metrics {
+    var cache: CacheNoCb = .{};
+    var timer = try std.time.Timer.start();
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        _ = cache.pop();
+    }
+    const ns = timer.read();
+    const rate = fmt_rate(iterations, ns);
+    const ns_per = fmt_ns_per(iterations, ns);
+    return .{ .total_ops = iterations, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
+}
+
 fn bench_clear_no_callback(cycles: usize, fill_n: usize) !Metrics {
     var cache: CacheNoCb = .{};
     var items: [CacheNoCb.capacity]Item = undefined;
@@ -402,6 +415,25 @@ pub fn main() !void {
     try fbs.writer().print("## push_pop_hits\n- iters: {s}\n- repeats: {}\n- ns/op median (IQR): {s} ({s}–{s})\n- pairs/s median: {s} (≈ {s} M/s)\n- single-op ops/s median: {s} (≈ {s} M/s)\n\n", .{ s_iters, st_stats.len, s_ns_med, s_ns_q1, s_ns_q3, s_ops_med, s_ops_h, s_ops2_med, s_ops2_h });
     try md_append(fbs.getWritten());
     std.debug.print("push_pop_hits  iters={}  ns/op={} ({}–{})  ops/s={} ({}–{})\n", .{ run_iters, med1.median, med1.q1, med1.q3, thr1.median, thr1.q1, thr1.q3 });
+
+    // Single-thread: pop misses (empty cache)
+    pilot = try bench_pop_miss(1_000_000);
+    run_iters = scale_iters(1_000_000, pilot.total_ns, target_ms_overflow);
+    st_stats = .{}; w = 0; while (w < warmups) : (w += 1) { _ = try bench_pop_miss(run_iters); }
+    rep = 0; while (rep < repeats) : (rep += 1) { const r = try bench_pop_miss(run_iters); record(&st_stats, r.total_ops, r.total_ns); }
+    const med_miss = medianIqr(st_stats.ns_op_list[0..st_stats.len]);
+    const thr_miss = medianIqr(st_stats.ops_s_list[0..st_stats.len]);
+    fbs.reset();
+    nb1 = .{0} ** 32; nb2 = .{0} ** 32; nb3 = .{0} ** 32; nb4 = .{0} ** 32; nb5 = .{0} ** 32; nb6 = .{0} ** 32;
+    const s_pop_iters = fmt_u64_commas(&nb1, run_iters);
+    const s_pop_ns = fmt_u64_commas(&nb2, med_miss.median);
+    const s_pop_q1 = fmt_u64_commas(&nb3, med_miss.q1);
+    const s_pop_q3 = fmt_u64_commas(&nb4, med_miss.q3);
+    const s_pop_ops = fmt_u64_commas(&nb5, thr_miss.median);
+    const s_pop_ops_h = fmt_rate_human(&nb6, thr_miss.median);
+    try fbs.writer().print("## pop_empty\n- attempts: {s}\n- repeats: {}\n- ns/attempt median (IQR): {s} ({s}–{s})\n- attempts/s median: {s} (≈ {s} M/s)\n\n", .{ s_pop_iters, st_stats.len, s_pop_ns, s_pop_q1, s_pop_q3, s_pop_ops, s_pop_ops_h });
+    try md_append(fbs.getWritten());
+    std.debug.print("pop_empty  attempts={}  ns/attempt={} ({}–{})  attempts/s={} ({}–{})\n", .{ run_iters, med_miss.median, med_miss.q1, med_miss.q3, thr_miss.median, thr_miss.q1, thr_miss.q3 });
 
     // Single-thread: overflow pushes
     pilot = try bench_push_overflow(1_000_000);

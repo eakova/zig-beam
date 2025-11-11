@@ -69,3 +69,38 @@ test "ArcCycleDetector ignores inline arcs" {
     defer leaks.deinit();
     try testing.expectEqual(@as(usize, 0), leaks.list.items.len);
 }
+
+test "ArcCycleDetector survives partially traced graphs" {
+    var detector = Detector.init(testing.allocator, traceNode, null);
+    defer detector.deinit();
+
+    var node_a = try NodeArc.init(testing.allocator, .{ .label = 'A', .next = null });
+    defer node_a.release();
+    var node_b = try NodeArc.init(testing.allocator, .{ .label = 'B', .next = null });
+    defer node_b.release();
+    var node_c = try NodeArc.init(testing.allocator, .{ .label = 'C', .next = null });
+    defer node_c.release();
+
+    node_a.asPtr().data.next = node_b.clone();
+    node_b.asPtr().data.next = node_c.clone();
+    node_c.asPtr().data.next = node_a.clone();
+
+    try detector.track(node_a.clone());
+    try detector.track(node_b.clone());
+
+    var weak_a = node_a.downgrade().?;
+    var weak_b = node_b.downgrade().?;
+    defer weak_a.release();
+    defer weak_b.release();
+
+    node_a.release();
+    node_b.release();
+
+    var leaks = try detector.detectCycles();
+    defer leaks.deinit();
+    for (leaks.list.items) |arc| {
+        if (arc.asPtr().data.next) |child| child.release();
+        arc.release();
+    }
+    try testing.expectEqual(@as(usize, 2), leaks.list.items.len);
+}

@@ -59,3 +59,29 @@ test "TaggedPointer cooperates with allocator managed blocks" {
     const restored = CachePtr.fromUnsigned(tagged.toUnsigned());
     try std.testing.expectEqual(block, restored.getPtr());
 }
+
+test "TaggedPointer raw buffer shuffle remains consistent" {
+    var nodes: [4]CacheNode = undefined;
+    var idx: usize = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        nodes[idx] = .{ .value = 10 * (idx + 1) };
+    }
+    var encoded: [4]usize = undefined;
+
+    idx = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        const tag: u1 = @intCast(idx % 2);
+        const tagged = CachePtr.new(&nodes[idx], tag) catch unreachable;
+        encoded[idx] = tagged.toUnsigned();
+    }
+
+    std.mem.reverse(usize, &encoded);
+
+    idx = 0;
+    while (idx < encoded.len) : (idx += 1) {
+        const restored = CachePtr.fromUnsigned(encoded[idx]);
+        const original_index = nodes.len - 1 - idx;
+        try std.testing.expectEqual(@as(u1, @intCast(original_index % 2)), restored.getTag());
+        try std.testing.expectEqual(@as(usize, nodes[original_index].value), restored.getPtr().value);
+    }
+}

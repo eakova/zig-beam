@@ -6,6 +6,7 @@ const InlineArcU32 = ArcModule.Arc(u32);
 const InlineArcU64 = ArcModule.Arc(u64);
 const HeapArc = ArcModule.Arc(TrackedValue);
 const HeapArcBytes = ArcModule.Arc([32]u8);
+const HeapInlineArray = ArcModule.Arc([16]u8);
 
 const TrackedValue = struct {
     payload: usize,
@@ -83,4 +84,43 @@ test "ArcWeak upgrades while strong refs remain" {
     weak.release();
 
     try testing.expect(deinit_called);
+}
+
+test "Arc tryUnwrap defers destruction while weak reference is alive" {
+    var deinit_called = false;
+    var arc = try HeapArc.init(testing.allocator, TrackedValue.init(&deinit_called, 11));
+    const weak_opt = arc.downgrade();
+    try testing.expect(weak_opt != null);
+    var weak = weak_opt.?;
+
+    var value = try arc.tryUnwrap();
+    try testing.expect(!deinit_called);
+    value.deinit();
+    weak.release();
+    try testing.expect(deinit_called);
+}
+
+test "ArcWeak upgrade returns null after final strong drop" {
+    var deinit_called = false;
+    var arc = try HeapArc.init(testing.allocator, TrackedValue.init(&deinit_called, 42));
+    const weak_opt = arc.downgrade();
+    try testing.expect(weak_opt != null);
+    var weak = weak_opt.?;
+
+    arc.release();
+    try testing.expect(weak.upgrade() == null);
+    weak.release();
+    try testing.expect(deinit_called);
+}
+
+test "Arc heap makeMut keeps pointer when unique" {
+    var arc = try HeapInlineArray.init(testing.allocator, [_]u8{1} ** 16);
+    defer arc.release();
+
+    const before = arc.get();
+    const mut_ptr = try arc.makeMut();
+    try testing.expectEqual(before, mut_ptr);
+
+    mut_ptr.*[0] = 99;
+    try testing.expectEqual(@as(u8, 99), arc.get().*[0]);
 }

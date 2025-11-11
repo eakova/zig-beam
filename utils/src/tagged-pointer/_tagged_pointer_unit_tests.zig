@@ -43,3 +43,45 @@ test "TaggedPointer preserves pointer bits when toggling tag" {
     tagged.setTag(0);
     try std.testing.expectEqual(ptr, tagged.getPtr());
 }
+
+test "TaggedPointer supports maximum tag space" {
+    const Ptr = TaggedPointer(*align(8) TestNode, 3);
+    var nodes: [4]TestNode = undefined;
+    var idx: usize = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        nodes[idx] = .{ .value = idx };
+    }
+
+    idx = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        const tag: u3 = @intCast(idx);
+        const node_ptr: *align(8) TestNode = @ptrCast(&nodes[idx]);
+        var tagged = try Ptr.new(node_ptr, tag);
+        try std.testing.expectEqual(@as(u3, tag), @as(u3, @intCast(tagged.getTag())));
+        try std.testing.expectEqual(node_ptr, tagged.getPtr());
+    }
+}
+
+test "TaggedPointer raw bits roundtrip across multiple nodes" {
+    const Ptr = TaggedPointer(NodePtr, 2);
+    var nodes: [3]TestNode = undefined;
+    var idx: usize = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        nodes[idx] = .{ .value = 10 * (idx + 1) };
+    }
+    var storage: [3]usize = undefined;
+
+    idx = 0;
+    while (idx < storage.len) : (idx += 1) {
+        const tag: u2 = @intCast(idx);
+        var tagged = try Ptr.new(@ptrCast(&nodes[idx]), tag);
+        storage[idx] = tagged.toUnsigned();
+    }
+
+    idx = 0;
+    while (idx < storage.len) : (idx += 1) {
+        const restored = Ptr.fromUnsigned(storage[idx]);
+        try std.testing.expectEqual(@as(u2, @intCast(idx)), @as(u2, @intCast(restored.getTag())));
+        try std.testing.expectEqual(@as(NodePtr, @ptrCast(&nodes[idx])), restored.getPtr());
+    }
+}
