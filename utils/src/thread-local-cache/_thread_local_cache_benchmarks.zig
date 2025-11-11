@@ -21,7 +21,7 @@ fn recycle_atomic(ctx: ?*anyopaque, _: *Item) void {
 const CacheNoCb = cache_mod.ThreadLocalCache(*Item, null);
 const CacheWithCb = cache_mod.ThreadLocalCache(*Item, recycle_atomic);
 
-const MD_PATH = "src/thread-local-cache/docs/thread_local_cache_benchmark_results.md";
+const MD_PATH = "docs/thread_local_cache_benchmark_results.md";
 
 fn md_truncate_write(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });

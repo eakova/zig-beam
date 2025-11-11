@@ -19,7 +19,7 @@ const DEFAULT_MT_THREADS: usize = 4;
 const MIN_MT_THREADS: usize = 2;
 const MAX_MT_THREADS: usize = 16;
 
-const MD_PATH = "src/arc/docs/arc_benchmark_results.md";
+const MD_PATH = "docs/arc_benchmark_results.md";
 
 fn write_md_truncate(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });

@@ -31,6 +31,9 @@ zig build samples-tlc
 zig build bench-tlc   # runs _thread_local_cache_benchmarks.zig and updates docs
 ```
 
+Docs
+- Report: [`utils/docs/thread_local_cache_benchmark_results.md`](../docs/thread_local_cache_benchmark_results.md)
+
 ## ARC Core
 Atomic reference-counted smart pointer (`Arc<T>`) plus optional weak handles and
 SVO support for tiny POD values.
@@ -45,6 +48,10 @@ zig build samples-arc
 zig build bench-arc                  # single-threaded benchmarks + report
 ARC_BENCH_RUN_MT=1 zig build bench-arc  # also enables multi-thread benchmark
 ```
+
+Docs
+- Report: [`utils/docs/arc_benchmark_results.md`](../docs/arc_benchmark_results.md)
+- Dependency & interaction: [`utils/docs/dependency_graph.md`](../docs/dependency_graph.md)
 
 ## ARC Pool
 Multi-layer allocator (TLS cache + Treiber stack + allocator fallback) that
@@ -68,4 +75,85 @@ zig build test-arc-cycle
 ## Full Suite
 ```bash
 zig build test
+```
+
+## Local caches (optional)
+
+To avoid system cache permission issues, set local cache folders in the library root (`utils/`).
+
+macOS/Linux (bash/zsh):
+```bash
+export ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache
+export ZIG_LOCAL_CACHE_DIR=$PWD/.zig-local-cache
+```
+
+Windows (PowerShell):
+```powershell
+$env:ZIG_GLOBAL_CACHE_DIR = "$PWD/.zig-global-cache"
+$env:ZIG_LOCAL_CACHE_DIR  = "$PWD/.zig-local-cache"
+```
+
+## Use `utils` In Your Project
+
+Consume the `utils` library via Zig’s package system (recommended). This exposes the wrapper module `zig_beam_utils`, which re‑exports tagged pointer, thread‑local cache, ARC, pool, and cycle detector.
+
+1) Add to your `build.zig.zon`
+
+```zig
+.{
+    .name = "your-app",
+    .version = "0.1.0",
+    .dependencies = .{
+        .zig_beam_utils = .{
+            .url = "https://github.com/eakova/zig-beam/archive/refs/heads/main.tar.gz",
+            // Fill with: zig fetch <url> --save
+            .hash = "<fill-with-zig-fetch-output>",
+        },
+    },
+}
+```
+
+2) Wire it in your `build.zig`
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const dep = b.dependency("zig_beam_utils", .{ .target = target, .optimize = optimize });
+    const beam_utils = dep.module("zig_beam_utils");
+
+    const exe = b.addExecutable(.{
+        .name = "your-app",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("zig_beam_utils", beam_utils);
+    b.installArtifact(exe);
+}
+```
+
+3) Import and use
+
+```zig
+// src/main.zig
+const std = @import("std");
+const utils = @import("zig_beam_utils");
+
+pub fn main() !void {
+    // Examples
+    const TaggedPointer = utils.tagged_pointer.TaggedPointer;
+    const ThreadLocalCache = utils.thread_local_cache.ThreadLocalCache;
+    const Arc = utils.arc.Arc;
+    const ArcPool = utils.arc_pool.ArcPool;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    var arc_u64 = try Arc(u64).init(alloc, 42);
+    defer arc_u64.release();
+    std.debug.print("arc.get() = {}\n", .{arc_u64.get().*});
+}
 ```
