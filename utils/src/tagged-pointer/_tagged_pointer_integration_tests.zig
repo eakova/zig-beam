@@ -1,3 +1,7 @@
+//! Integration tests that exercise `TaggedPointer` inside small helper types.
+//! Focus: making real-world patterns (freelist flags, allocator-owned nodes)
+//! obvious to newer contributors.
+
 const std = @import("std");
 const TaggedPointer = @import("tagged_pointer.zig").TaggedPointer;
 
@@ -28,6 +32,7 @@ const TaggedCache = struct {
 };
 
 test "TaggedPointer keeps freelist flag bits" {
+    // Simulate a freelist where one tag bit indicates whether the slot is “hot”.
     var nodes: [2]CacheNode = .{ .{ .value = 1 }, .{ .value = 2 } };
     var cache = TaggedCache{};
 
@@ -44,6 +49,7 @@ test "TaggedPointer keeps freelist flag bits" {
 }
 
 test "TaggedPointer cooperates with allocator managed blocks" {
+    // Prove we can tag pointers that came from a regular allocator.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -58,4 +64,31 @@ test "TaggedPointer cooperates with allocator managed blocks" {
 
     const restored = CachePtr.fromUnsigned(tagged.toUnsigned());
     try std.testing.expectEqual(block, restored.getPtr());
+}
+
+test "TaggedPointer raw buffer shuffle remains consistent" {
+    // Treat encoded pointers as raw integers, shuffle them, and rebuild.
+    var nodes: [4]CacheNode = undefined;
+    var idx: usize = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        nodes[idx] = .{ .value = 10 * (idx + 1) };
+    }
+    var encoded: [4]usize = undefined;
+
+    idx = 0;
+    while (idx < nodes.len) : (idx += 1) {
+        const tag: u1 = @intCast(idx % 2);
+        const tagged = CachePtr.new(&nodes[idx], tag) catch unreachable;
+        encoded[idx] = tagged.toUnsigned();
+    }
+
+    std.mem.reverse(usize, &encoded);
+
+    idx = 0;
+    while (idx < encoded.len) : (idx += 1) {
+        const restored = CachePtr.fromUnsigned(encoded[idx]);
+        const original_index = nodes.len - 1 - idx;
+        try std.testing.expectEqual(@as(u1, @intCast(original_index % 2)), restored.getTag());
+        try std.testing.expectEqual(@as(usize, nodes[original_index].value), restored.getPtr().value);
+    }
 }

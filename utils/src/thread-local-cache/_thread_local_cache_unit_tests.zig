@@ -1,3 +1,6 @@
+//! ThreadLocalCache unit tests.
+//! Each scenario calls out the setup and the expected behavior.
+
 const std = @import("std");
 
 const cache_mod = @import("thread_local_cache.zig");
@@ -123,6 +126,11 @@ test "clear without callback simply discards and is idempotent" {
     try std.testing.expect(cache.isEmpty());
 }
 
+var null_ctx_hits: usize = 0;
+fn recycleCountOnly(_: ?*anyopaque, _: *Item) void {
+    null_ctx_hits += 1;
+}
+
 // Scenario: clear() with callback drains in LIFO order
 //
 // Setup: Push two items; clear with a tracker.
@@ -164,5 +172,39 @@ test "partial fill then clear resets cache" {
     // Cache should accept pushes again after clear
     try std.testing.expect(cache.push(&items[2]));
     try std.testing.expectEqual(@as(?*Item, &items[2]), cache.pop());
+    try std.testing.expect(cache.isEmpty());
+}
+
+// Scenario: clear() with callback but null context
+//
+// Setup: Use cache with callback that increments a global counter even when ctx = null.
+// Expect: All cached entries trigger the callback; counter equals number of pushes.
+test "clear with callback works without context pointer" {
+    const Cache = cache_mod.ThreadLocalCache(*Item, recycleCountOnly);
+    var cache: Cache = .{};
+    var items: [3]Item = .{ .{ .id = 1 }, .{ .id = 2 }, .{ .id = 3 } };
+    null_ctx_hits = 0;
+
+    try std.testing.expect(cache.push(&items[0]));
+    try std.testing.expect(cache.push(&items[1]));
+    cache.clear(null);
+
+    try std.testing.expectEqual(@as(usize, 2), null_ctx_hits);
+    try std.testing.expect(cache.isEmpty());
+}
+
+// Scenario: clear() on empty cache does not call callback
+//
+// Setup: Call clear twice on empty cache using the counting callback.
+// Expect: Counter remains zero and cache stays empty.
+test "clear on empty cache is a no-op for callbacks" {
+    const Cache = cache_mod.ThreadLocalCache(*Item, recycleCountOnly);
+    var cache: Cache = .{};
+    null_ctx_hits = 0;
+
+    cache.clear(null);
+    cache.clear(null);
+
+    try std.testing.expectEqual(@as(usize, 0), null_ctx_hits);
     try std.testing.expect(cache.isEmpty());
 }

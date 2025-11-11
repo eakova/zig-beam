@@ -18,14 +18,20 @@
 - Zig: 0.15.2
 - Build Mode: ReleaseFast
 - Pointer Width: 64-bit
-- Logical CPUs: 16
+- Logical CPUs: 0
 
 ## push_pop_hits
-- iters: 45,471,701
+- iters: 32,827,247
 - repeats: 2
 - ns/op median (IQR): 2 (2–2)
-- pairs/s median: 477,346,447 (≈ 477 M/s)
-- single-op ops/s median: 954,692,894 (≈ 954 M/s)
+- pairs/s median: 432,009,960 (≈ 432 M/s)
+- single-op ops/s median: 864,019,920 (≈ 864 M/s)
+
+## pop_empty
+- attempts: 50,000,000
+- repeats: 2
+- ns/attempt median (IQR): 0 (0–0)
+- attempts/s median: 609,756,097,560,975 (≈ 609,756 M/s)
 
 ## push_overflow(full)
 - attempts: 50,000,000
@@ -37,28 +43,28 @@
 - cycles: 50,000,000 (items/cycle: 8)
 - repeats: 2
 - ns/item median (IQR): 0 (0–0)
-- items/s median: 4,878,048,780,487,804 (≈ 4,878,048 M/s)
+- items/s median: 9,756,097,560,975,609 (≈ 9,756,097 M/s)
 
 ## clear_with_callback
 - cycles: 50,000,000 (items/cycle: 8)
 - repeats: 2
 - ns/item median (IQR): 0 (0–0)
-- items/s median: 0 (≈ 0 M/s)
+- items/s median: 9,639,953,542,392,566 (≈ 9,639,953 M/s)
 
 ## mt_push_pop_hits
 - threads: 4
 - iters/thread: 50,000,000
 - repeats: 2
 - ns/iter median (IQR): 0 (0–0)
-- pairs/s median: 2,155,687,023 (≈ 2 M/s)
-- per-thread pairs/s median: 538 M/s
+- pairs/s median: 2,244,468,443 (≈ 2 M/s)
+- per-thread pairs/s median: 561 M/s
 - per-thread single-op ops/s median: 1 M/s
 
 ## mt_fill_and_clear(shared_cb)
 - threads: 4
-- cycles/thread: 321,918
+- cycles/thread: 359,796
 - repeats: 2
-- ns/item median (IQR): 14 (14–14)
-- items/s median: 70,819,452 (≈ 70 M/s)
-- per-thread items/s median: 17 M/s
+- ns/item median (IQR): 12 (12–12)
+- items/s median: 76,213,039 (≈ 76 M/s)
+- per-thread items/s median: 19 M/s
 

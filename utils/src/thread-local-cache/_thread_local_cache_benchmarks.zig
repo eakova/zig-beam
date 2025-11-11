@@ -1,3 +1,7 @@
+//! Benchmarks for ThreadLocalCache.
+//! Comments walk through the flow step by step:
+//! 1) warm up, 2) scale iterations, 3) record stats, 4) print + write docs.
+
 const std = @import("std");
 const cache_mod = @import("thread_local_cache.zig");
 
@@ -17,7 +21,7 @@ fn recycle_atomic(ctx: ?*anyopaque, _: *Item) void {
 const CacheNoCb = cache_mod.ThreadLocalCache(*Item, null);
 const CacheWithCb = cache_mod.ThreadLocalCache(*Item, recycle_atomic);
 
-const MD_PATH = "src/thread-local-cache/docs/thread_local_cache_benchmark_results.md";
+const MD_PATH = "docs/thread_local_cache_benchmark_results.md";
 
 fn md_truncate_write(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });
@@ -144,6 +148,7 @@ fn record(stats: *Stats, ops: usize, ns: u64) void {
 
 const Metrics = struct { total_ops: usize, total_ns: u64, ns_per: u64, rate_per_s: u64 };
 
+/// Measure alternating push/pop when the cache never misses.
 fn bench_push_pop_hits(iterations: usize) !Metrics {
     var cache: CacheNoCb = .{};
     var item = Item{ .id = 1 };
@@ -159,6 +164,7 @@ fn bench_push_pop_hits(iterations: usize) !Metrics {
     return .{ .total_ops = iterations, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
 }
 
+/// Measure the "cache full" fast-path (push returns false immediately).
 fn bench_push_overflow(attempts: usize) !Metrics {
     var cache: CacheNoCb = .{};
     var items: [CacheNoCb.capacity]Item = undefined;
@@ -180,6 +186,20 @@ fn bench_push_overflow(attempts: usize) !Metrics {
     return .{ .total_ops = attempts, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
 }
 
+fn bench_pop_miss(iterations: usize) !Metrics {
+    var cache: CacheNoCb = .{};
+    var timer = try std.time.Timer.start();
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        _ = cache.pop();
+    }
+    const ns = timer.read();
+    const rate = fmt_rate(iterations, ns);
+    const ns_per = fmt_ns_per(iterations, ns);
+    return .{ .total_ops = iterations, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
+}
+
+/// Measure `clear(null)` when no recycle callback is installed.
 fn bench_clear_no_callback(cycles: usize, fill_n: usize) !Metrics {
     var cache: CacheNoCb = .{};
     var items: [CacheNoCb.capacity]Item = undefined;
@@ -204,6 +224,7 @@ fn bench_clear_no_callback(cycles: usize, fill_n: usize) !Metrics {
     return .{ .total_ops = items_cleared, .total_ns = ns, .ns_per = ns_per, .rate_per_s = rate };
 }
 
+/// Measure `clear(ctx)` when every item must run the recycle callback.
 fn bench_clear_with_callback(cycles: usize, fill_n: usize) !Metrics {
     var cache: CacheWithCb = .{};
     var items: [CacheWithCb.capacity]Item = undefined;
@@ -247,6 +268,7 @@ fn worker_hits(iterations: usize, start_flag: *AtomicUsize) void {
     }
 }
 
+/// Multi-threaded version of push+pop hits (each thread uses its TLS cache).
 fn bench_mt_push_pop(threads_count: usize, iterations_per_thread: usize) !Metrics {
     var start_flag = AtomicUsize.init(0);
 
@@ -296,6 +318,7 @@ fn worker_fill_and_clear(cycles: usize, start_flag: *AtomicUsize, shared_counter
     }
 }
 
+/// Multi-threaded fill+clear using a shared recycle callback to stress global paths.
 fn bench_mt_fill_and_clear(threads_count: usize, cycles_per_thread: usize) !Metrics {
     var start_flag = AtomicUsize.init(0);
     var shared_counter = AtomicUsize.init(0);
@@ -402,6 +425,25 @@ pub fn main() !void {
     try fbs.writer().print("## push_pop_hits\n- iters: {s}\n- repeats: {}\n- ns/op median (IQR): {s} ({s}–{s})\n- pairs/s median: {s} (≈ {s} M/s)\n- single-op ops/s median: {s} (≈ {s} M/s)\n\n", .{ s_iters, st_stats.len, s_ns_med, s_ns_q1, s_ns_q3, s_ops_med, s_ops_h, s_ops2_med, s_ops2_h });
     try md_append(fbs.getWritten());
     std.debug.print("push_pop_hits  iters={}  ns/op={} ({}–{})  ops/s={} ({}–{})\n", .{ run_iters, med1.median, med1.q1, med1.q3, thr1.median, thr1.q1, thr1.q3 });
+
+    // Single-thread: pop misses (empty cache)
+    pilot = try bench_pop_miss(1_000_000);
+    run_iters = scale_iters(1_000_000, pilot.total_ns, target_ms_overflow);
+    st_stats = .{}; w = 0; while (w < warmups) : (w += 1) { _ = try bench_pop_miss(run_iters); }
+    rep = 0; while (rep < repeats) : (rep += 1) { const r = try bench_pop_miss(run_iters); record(&st_stats, r.total_ops, r.total_ns); }
+    const med_miss = medianIqr(st_stats.ns_op_list[0..st_stats.len]);
+    const thr_miss = medianIqr(st_stats.ops_s_list[0..st_stats.len]);
+    fbs.reset();
+    nb1 = .{0} ** 32; nb2 = .{0} ** 32; nb3 = .{0} ** 32; nb4 = .{0} ** 32; nb5 = .{0} ** 32; nb6 = .{0} ** 32;
+    const s_pop_iters = fmt_u64_commas(&nb1, run_iters);
+    const s_pop_ns = fmt_u64_commas(&nb2, med_miss.median);
+    const s_pop_q1 = fmt_u64_commas(&nb3, med_miss.q1);
+    const s_pop_q3 = fmt_u64_commas(&nb4, med_miss.q3);
+    const s_pop_ops = fmt_u64_commas(&nb5, thr_miss.median);
+    const s_pop_ops_h = fmt_rate_human(&nb6, thr_miss.median);
+    try fbs.writer().print("## pop_empty\n- attempts: {s}\n- repeats: {}\n- ns/attempt median (IQR): {s} ({s}–{s})\n- attempts/s median: {s} (≈ {s} M/s)\n\n", .{ s_pop_iters, st_stats.len, s_pop_ns, s_pop_q1, s_pop_q3, s_pop_ops, s_pop_ops_h });
+    try md_append(fbs.getWritten());
+    std.debug.print("pop_empty  attempts={}  ns/attempt={} ({}–{})  attempts/s={} ({}–{})\n", .{ run_iters, med_miss.median, med_miss.q1, med_miss.q3, thr_miss.median, thr_miss.q1, thr_miss.q3 });
 
     // Single-thread: overflow pushes
     pilot = try bench_push_overflow(1_000_000);

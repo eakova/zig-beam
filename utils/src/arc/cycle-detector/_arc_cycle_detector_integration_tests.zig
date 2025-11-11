@@ -63,8 +63,6 @@ test "ArcCycleDetector detects cycles built from pooled arcs" {
     var weak_b = node_b.downgrade().?;
     defer weak_a.release();
     defer weak_b.release();
-    defer weak_a.release();
-    defer weak_b.release();
 
     node_a.release();
     node_b.release();
@@ -188,6 +186,70 @@ test "ArcCycleDetector survives pool churn with thread-local caches" {
     var leaks = try detector.detectCycles();
     defer leaks.deinit();
 
+    for (leaks.list.items) |*arc_ptr| {
+        releaseNext(arc_ptr);
+        arc_ptr.release();
+    }
+    pool.drainThreadCache();
+
+    weak_a.release();
+    weak_b.release();
+
+    try testing.expectEqual(@as(usize, 2), leaks.list.items.len);
+}
+
+const PoolCtx = struct {
+    pool: *Pool,
+    detector: *Detector,
+    iterations: usize,
+};
+
+fn workerTrack(ctx: *PoolCtx) void {
+    defer ctx.pool.drainThreadCache();
+    var i: usize = 0;
+    while (i < ctx.iterations) : (i += 1) {
+        const label: u8 = @intCast((i % 26) + 'A');
+        var arc = ctx.pool.create(.{ .label = label, .next = null }) catch unreachable;
+        ctx.detector.track(arc.clone()) catch unreachable;
+        ctx.pool.recycle(arc);
+    }
+}
+
+test "ArcCycleDetector scales with pooled tracking across threads" {
+    var pool = Pool.init(testing.allocator);
+    defer pool.deinit();
+
+    var detector = Detector.init(testing.allocator, traceNode, null);
+    defer detector.deinit();
+
+    var node_a = try pool.create(.{ .label = 'A', .next = null });
+    var node_b = try pool.create(.{ .label = 'B', .next = null });
+    node_a.asPtr().data.next = node_b.clone();
+    node_b.asPtr().data.next = node_a.clone();
+
+    try detector.track(node_a.clone());
+    try detector.track(node_b.clone());
+
+    var weak_a = node_a.downgrade().?;
+    var weak_b = node_b.downgrade().?;
+
+    var threads: [4]std.Thread = undefined;
+    var contexts: [4]PoolCtx = undefined;
+    for (&threads, 0..) |*t, idx| {
+        contexts[idx] = .{
+            .pool = &pool,
+            .detector = &detector,
+            .iterations = 500 + idx * 137,
+        };
+        t.* = try std.Thread.spawn(.{}, workerTrack, .{&contexts[idx]});
+    }
+    for (threads) |t| t.join();
+
+    node_a.release();
+    node_b.release();
+
+    var leaks = try detector.detectCycles();
+    defer leaks.deinit();
     for (leaks.list.items) |*arc_ptr| {
         releaseNext(arc_ptr);
         arc_ptr.release();

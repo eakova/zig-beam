@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const atomic = std.atomic;
 const meta = std.meta;
-const ArcWeak = @import("arc_weak.zig").ArcWeak;
+pub const ArcWeak = @import("arc_weak.zig").ArcWeak;
 const TaggedPointer = @import("tagged_pointer").TaggedPointer;
 const assert = std.debug.assert;
 

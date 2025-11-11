@@ -5,23 +5,21 @@ const std = @import("std");
 const testing = std.testing;
 const Thread = std.Thread;
 const Timer = std.time.Timer;
+const utils = @import("zig_beam_utils");
 
-// Adjust import paths for your project structure.
-const ArcModule = @import("arc.zig");
+const ArcModule = utils.arc;
 const ArcU64 = ArcModule.Arc(u64);
-const ArcPoolModule = @import("arc-pool/arc_pool.zig");
+const ArcArray64 = ArcModule.Arc([64]u8);
+const ArcPoolModule = utils.arc_pool;
 
 // --- Benchmark Configuration ---
 // The number of clone/release pairs to perform in each benchmark run.
 // A larger number gives more stable results.
-const BENCHMARK_ITERATIONS: u64 = 1_000_000;
+const DEFAULT_MT_THREADS: usize = 4;
+const MIN_MT_THREADS: usize = 2;
+const MAX_MT_THREADS: usize = 16;
 
-// The number of threads to use for the multi-threaded benchmark.
-// Defaults to the number of available CPU cores.
-// Use a fixed thread count to keep arrays comptime-known on Zig 0.15.
-const BENCHMARK_THREADS: usize = 4;
-
-const MD_PATH = "src/arc/docs/arc_benchmark_results.md";
+const MD_PATH = "docs/arc_benchmark_results.md";
 
 fn write_md_truncate(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });
@@ -96,7 +94,7 @@ fn sortAsc(slice: []u64) void {
     }
 }
 
-fn medianIqr(slice_in: []u64) struct { median: u64, q1: u64, q3: u64 } {
+fn medianIqr(slice_in: []const u64) struct { median: u64, q1: u64, q3: u64 } {
     var buf: [16]u64 = .{0} ** 16;
     const n = slice_in.len;
     if (n == 0) return .{ .median = 0, .q1 = 0, .q3 = 0 };
@@ -144,13 +142,26 @@ fn record(stats: *Stats, ops: u64, ns: u64) void {
     stats.len += 1;
 }
 
+fn detectThreadCount() usize {
+    const raw = std.Thread.getCpuCount() catch DEFAULT_MT_THREADS;
+    const safe = if (raw == 0) DEFAULT_MT_THREADS else raw;
+    const min_clamped = if (safe < MIN_MT_THREADS) MIN_MT_THREADS else safe;
+    return if (min_clamped > MAX_MT_THREADS) MAX_MT_THREADS else min_clamped;
+}
+
 // Single-Threaded Benchmark
 //
 // This test measures the raw, best-case performance of `clone` and `release`
 // operations without any cross-thread contention. It establishes the baseline
 // overhead of the reference counting mechanism.
+var global_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+fn getAllocator() std.mem.Allocator {
+    return global_gpa.allocator();
+}
+
 fn benchCloneReleaseType(comptime T: type, value: T, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
-    const allocator = testing.allocator;
+    const allocator = getAllocator();
     const ArcType = ArcModule.Arc(T);
     const pilot_iters: u64 = 100_000;
 
@@ -183,8 +194,8 @@ fn benchCloneReleaseType(comptime T: type, value: T, target_ms: u64, repeats: us
     return .{ .stats = stats, .iterations = run_iters };
 }
 
-pub fn run_single() !void {
-    const allocator = testing.allocator;
+pub fn run_single(mt_threads: usize) !void {
+    const allocator = getAllocator();
     // quick-mode params
     const target_ms_st: u64 = 100;
     const warmups: usize = 0;
@@ -250,7 +261,7 @@ pub fn run_single() !void {
             "- threads (MT): {d}\n\n" ++
             "## Machine\n" ++
             "- OS: {s}\n- Arch: {s}\n- Zig: {s}\n- Build Mode: {s}\n- Pointer Width: {}-bit\n- Logical CPUs: {}\n\n",
-        .{ run_iters, BENCHMARK_THREADS, os_tag, arch_tag, zig_ver, mode_tag, ptr_bits, cpu_count },
+        .{ run_iters, mt_threads, os_tag, arch_tag, zig_ver, mode_tag, ptr_bits, cpu_count },
     );
     try wr.print("## Single-Threaded\n", .{});
     const med = medianIqr(stats.ns_per_list[0..stats.len]);
@@ -279,12 +290,21 @@ pub fn run_single() !void {
 // This is a true test of the library's scalability.
 
 // Context for each worker thread in the multi-threaded benchmark.
+// Holds the shared Arc pointer and the iteration budget for that thread.
 const WorkerContext = struct {
     iterations: u64,
     shared_arc: *const ArcU64,
 };
 
-// The function executed by each worker thread.
+const PoolPayload = [64]u8;
+const PoolPayloadLen = 64;
+const PoolType = ArcPoolModule.ArcPool(PoolPayload);
+
+const PoolWorkerCtx = struct {
+    pool: *PoolType,
+    iterations: u64,
+};
+
 fn benchmarkWorker(ctx: *WorkerContext) void {
     var i: u64 = 0;
     while (i < ctx.iterations) : (i += 1) {
@@ -293,73 +313,103 @@ fn benchmarkWorker(ctx: *WorkerContext) void {
     }
 }
 
-pub fn run_multi() !void {
-    // Use a general-purpose allocator that honors alignment requirements.
+// Worker used in the ArcPool benchmark: continuously create/recycle nodes.
+fn poolWorker(ctx: *PoolWorkerCtx) void {
+    var i: u64 = 0;
+    while (i < ctx.iterations) : (i += 1) {
+        const arc = ctx.pool.create([_]u8{@intCast(i & 0xFF)} ** PoolPayloadLen) catch unreachable;
+        ctx.pool.recycle(arc);
+    }
+}
+
+/// Measure clone/release throughput for a shared Arc across multiple threads.
+fn benchMultiCloneRelease(
+    allocator: std.mem.Allocator,
+    threads: usize,
+    target_ms: u64,
+    repeats: usize,
+) !struct { stats: Stats, total_pairs: u64, per_thread: u64 } {
+    const pilot_iters: u64 = 100_000;
+    var pilot_arc = try ArcU64.init(allocator, 456);
+    defer pilot_arc.release();
+    var timer = try Timer.start();
+    var i: u64 = 0;
+    while (i < pilot_iters) : (i += 1) {
+        const clone = pilot_arc.clone();
+        clone.release();
+    }
+    const pilot_ns = timer.read();
+    const per_thread_iters = scale_iters(pilot_iters, pilot_ns, target_ms);
+    const total_iters = per_thread_iters * @as(u64, threads);
+
+    var stats = Stats{};
+    var rep: usize = 0;
+    while (rep < repeats) : (rep += 1) {
+        var shared_arc = try ArcU64.init(allocator, 456);
+        defer shared_arc.release();
+
+        const handles = try allocator.alloc(Thread, threads);
+        defer allocator.free(handles);
+        const contexts = try allocator.alloc(WorkerContext, threads);
+        defer allocator.free(contexts);
+
+        var idx: usize = 0;
+        while (idx < threads) : (idx += 1) {
+            contexts[idx] = .{
+                .iterations = per_thread_iters,
+                .shared_arc = &shared_arc,
+            };
+            handles[idx] = try Thread.spawn(.{}, benchmarkWorker, .{ &contexts[idx] });
+        }
+
+        timer = try Timer.start();
+        for (handles) |handle| handle.join();
+        const ns = timer.read();
+        record(&stats, total_iters, ns);
+    }
+
+    return .{ .stats = stats, .total_pairs = total_iters, .per_thread = per_thread_iters };
+}
+
+pub fn run_multi(thread_count: usize) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create the shared Arc that all threads will contend on.
-    var shared_arc = try ArcU64.init(allocator, 456);
-    defer shared_arc.release();
+    const result = try benchMultiCloneRelease(allocator, thread_count, 150, 2);
+    const med = medianIqr(result.stats.ns_per_list[0..result.stats.len]);
+    const thr = medianIqr(result.stats.ops_s_list[0..result.stats.len]);
 
-    // Prepare contexts and thread handles.
-    var threads: [BENCHMARK_THREADS]Thread = undefined;
-    var contexts: [BENCHMARK_THREADS]WorkerContext = undefined;
-    const iters_per_thread = BENCHMARK_ITERATIONS / BENCHMARK_THREADS;
+    var nb1: [32]u8 = undefined;
+    var nb2: [32]u8 = undefined;
+    var nb3: [32]u8 = undefined;
+    var nb4: [32]u8 = undefined;
+    var nb5: [32]u8 = undefined;
+    const s_iters = fmt_u64_commas(&nb1, result.per_thread);
+    const s_total = fmt_u64_commas(&nb2, result.total_pairs);
+    const s_ns = fmt_u64_commas(&nb3, med.median);
+    const s_ops = fmt_u64_commas(&nb4, thr.median);
+    const ops_h = fmt_rate_human(&nb5, thr.median);
 
-    var timer = try Timer.start();
-
-    // Spawn all worker threads.
-    for (&threads, 0..) |*t, i| {
-        contexts[i] = .{
-            .iterations = iters_per_thread,
-            .shared_arc = &shared_arc,
-        };
-        t.* = try Thread.spawn(.{}, benchmarkWorker, .{&contexts[i]});
-    }
-
-    // Wait for all worker threads to complete.
-    for (threads) |t| {
-        t.join();
-    }
-
-    const elapsed_ns = timer.read();
-    const total_iterations = iters_per_thread * BENCHMARK_THREADS;
-
-    // Calculate and print the results.
-    const ns_per_op = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(total_iterations));
-    const ops_per_sec = @as(f64, @floatFromInt(std.time.ns_per_s)) / ns_per_op;
+    std.debug.print(
+        "ARC MT  threads={} iters/thread={} total_pairs={} ns/op={} ({}–{})  ops/s={}\n",
+        .{ thread_count, result.per_thread, result.total_pairs, med.median, med.q1, med.q3, thr.median },
+    );
 
     var buf: [512]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
-    try w.print("## Multi-Threaded\n", .{});
-    try w.print("- Threads: {d}\n", .{BENCHMARK_THREADS});
-    try w.print("- Total Operations: {d}\n", .{total_iterations});
-    try w.print("- Total Time: {d} ms\n", .{elapsed_ns / std.time.ns_per_ms});
-    try w.print("- Latency (ns/op): {d:.3}\n", .{ns_per_op});
-    var nb: [32]u8 = undefined;
-    var nb2: [32]u8 = undefined;
-    var nb3: [32]u8 = undefined;
-    const ops_u64: u64 = @intFromFloat(ops_per_sec);
-    const s_ops = fmt_u64_commas(&nb, ops_u64);
-    const s_ops_h = fmt_rate_human(&nb2, ops_u64);
-    const per_thread = ops_u64 / BENCHMARK_THREADS;
-    const s_per_thread = fmt_rate_human(&nb3, per_thread);
-    try w.print("- Throughput: {s} (≈ {s} {s})\n", .{ s_ops, s_ops_h, unit_suffix(ops_u64) });
-    try w.print("- Per-thread Throughput: {s} {s}\n\n", .{ s_per_thread, unit_suffix(per_thread) });
+    try w.print("## Multi-Threaded ({d} threads)\n", .{thread_count});
+    try w.print("- iters/thread: {s}\n", .{s_iters});
+    try w.print("- total pairs: {s}\n", .{s_total});
+    try w.print("- ns/op median (IQR): {s} ({d}–{d})\n", .{ s_ns, med.q1, med.q3 });
+    try w.print("- ops/s median: {s} (≈ {s} {s})\n\n", .{ s_ops, ops_h, unit_suffix(thr.median) });
     try write_md_append(fbs.getWritten());
-    // Console summary
-    std.debug.print("ARC MT  threads={} total_ops={}  ns/op={d:.3}  ops/s={}  per-thread≈{}\n", .{ BENCHMARK_THREADS, total_iterations, ns_per_op, ops_u64, per_thread });
-
-    // A simple assertion. Even under contention, performance should be reasonable.
-    try testing.expect(ns_per_op < 100.0);
 }
 
 fn benchDowngradeUpgrade(comptime T: type, value: T, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
     const ArcType = ArcModule.Arc(T);
-    const allocator = testing.allocator;
+    const allocator = getAllocator();
     const pilot_iters: u64 = 50_000;
 
     var arc = try ArcType.init(allocator, value);
@@ -395,6 +445,34 @@ fn benchDowngradeUpgrade(comptime T: type, value: T, target_ms: u64, repeats: us
     return .{ .stats = stats, .iterations = run_iters };
 }
 
+fn benchRawHeapChurn(value: [64]u8, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
+    const pilot_iters: u64 = 50_000;
+    const allocator = getAllocator();
+    var timer = try Timer.start();
+    var i: u64 = 0;
+    while (i < pilot_iters) : (i += 1) {
+        var arc = try ArcArray64.init(allocator, value);
+        arc.release();
+    }
+    const pilot_ns = timer.read();
+    const run_iters = scale_iters(pilot_iters, pilot_ns, target_ms);
+
+    var stats = Stats{};
+    var rep: usize = 0;
+    while (rep < repeats) : (rep += 1) {
+        timer = try Timer.start();
+        i = 0;
+        while (i < run_iters) : (i += 1) {
+            var arc = try ArcArray64.init(allocator, value);
+            arc.release();
+        }
+        const ns = timer.read();
+        record(&stats, run_iters, ns);
+    }
+
+    return .{ .stats = stats, .iterations = run_iters };
+}
+
 fn benchPoolChurn(pool: *ArcPoolModule.ArcPool([64]u8), value: [64]u8, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
     const pilot_iters: u64 = 50_000;
     var timer = try Timer.start();
@@ -421,6 +499,50 @@ fn benchPoolChurn(pool: *ArcPoolModule.ArcPool([64]u8), value: [64]u8, target_ms
     }
 
     return .{ .stats = stats, .iterations = run_iters };
+}
+
+/// Spawn `thread_count` workers that hammer `ArcPool.create`/`recycle`.
+fn measurePoolChurnMT(pool: *PoolType, allocator: std.mem.Allocator, thread_count: usize, iterations: u64) !u64 {
+    const handles = try allocator.alloc(Thread, thread_count);
+    defer allocator.free(handles);
+    const contexts = try allocator.alloc(PoolWorkerCtx, thread_count);
+    defer allocator.free(contexts);
+
+    var idx: usize = 0;
+    while (idx < thread_count) : (idx += 1) {
+        contexts[idx] = .{ .pool = pool, .iterations = iterations };
+        handles[idx] = try Thread.spawn(.{}, poolWorker, .{ &contexts[idx] });
+    }
+
+    var timer = try Timer.start();
+    for (handles) |handle| handle.join();
+    const ns = timer.read();
+    pool.drainThreadCache();
+    return ns;
+}
+
+/// Multi-threaded ArcPool benchmark (uses `measurePoolChurnMT` under the hood).
+fn benchPoolChurnMT(thread_count: usize, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
+    const allocator = getAllocator();
+    const pilot_iters: u64 = 20_000;
+
+    var pilot_pool = PoolType.init(allocator);
+    const pilot_ns = try measurePoolChurnMT(&pilot_pool, allocator, thread_count, pilot_iters);
+    pilot_pool.deinit();
+
+    const per_thread_iters = scale_iters(pilot_iters, pilot_ns, target_ms);
+    const total_iters = per_thread_iters * @as(u64, thread_count);
+
+    var stats = Stats{};
+    var rep: usize = 0;
+    while (rep < repeats) : (rep += 1) {
+        var pool = PoolType.init(allocator);
+        const ns = try measurePoolChurnMT(&pool, allocator, thread_count, per_thread_iters);
+        pool.deinit();
+        record(&stats, total_iters, ns);
+    }
+
+    return .{ .stats = stats, .iterations = total_iters };
 }
 
 fn writeBenchRow(wr: anytype, label: []const u8, iterations: u64, stats: Stats) !void {
@@ -467,21 +589,57 @@ pub fn run_downgrade_upgrade() !void {
     try write_md_append(fbs.getWritten());
 }
 
+/// Compare raw heap allocations vs ArcPool reuse (single-threaded).
 pub fn run_pool_churn() !void {
-    var pool = ArcPoolModule.ArcPool([64]u8).init(testing.allocator);
+    var pool = ArcPoolModule.ArcPool([64]u8).init(getAllocator());
     defer pool.deinit();
 
-    const result = try benchPoolChurn(&pool, [_]u8{9} ** 64, 60, 2);
+    const raw_result = try benchRawHeapChurn([_]u8{9} ** 64, 60, 2);
+    const pool_result = try benchPoolChurn(&pool, [_]u8{9} ** 64, 60, 2);
 
     var buf: [512]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const wr = fbs.writer();
 
-    try wr.print("## ArcPool Create/Recycle Benchmark\n", .{});
+    try wr.print("## Heap vs ArcPool Create/Recycle Benchmark\n", .{});
     try wr.print("| Scenario | Iterations | ns/op (median) | ops/s (median) |\n", .{});
     try wr.print("| --- | --- | --- | --- |\n", .{});
-    try writeBenchRow(wr, "pool churn", result.iterations, result.stats);
+    try writeBenchRow(wr, "direct heap", raw_result.iterations, raw_result.stats);
+    try writeBenchRow(wr, "ArcPool recycle", pool_result.iterations, pool_result.stats);
     try wr.print("\n", .{});
+    try write_md_append(fbs.getWritten());
+}
+
+/// Measure ArcPool churn when multiple threads share the pool.
+pub fn run_pool_churn_mt(thread_count: usize) !void {
+    const result = try benchPoolChurnMT(thread_count, 120, 2);
+    const med = medianIqr(result.stats.ns_per_list[0..result.stats.len]);
+    const thr = medianIqr(result.stats.ops_s_list[0..result.stats.len]);
+
+    var nb1: [32]u8 = undefined;
+    var nb2: [32]u8 = undefined;
+    var nb3: [32]u8 = undefined;
+    var nb4: [32]u8 = undefined;
+    var nb5: [32]u8 = undefined;
+    const s_iters = fmt_u64_commas(&nb1, result.iterations / @as(u64, thread_count));
+    const s_total = fmt_u64_commas(&nb2, result.iterations);
+    const s_ns = fmt_u64_commas(&nb3, med.median);
+    const s_ops = fmt_u64_commas(&nb4, thr.median);
+    const ops_h = fmt_rate_human(&nb5, thr.median);
+
+    std.debug.print(
+        "ArcPool MT  threads={} total_pairs={} ns/op={} ({}–{}) ops/s={}\n",
+        .{ thread_count, result.iterations, med.median, med.q1, med.q3, thr.median },
+    );
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const wr = fbs.writer();
+    try wr.print("## ArcPool Multi-Threaded ({d} threads)\n", .{thread_count});
+    try wr.print("- iters/thread: {s}\n", .{s_iters});
+    try wr.print("- total pairs: {s}\n", .{s_total});
+    try wr.print("- ns/op median (IQR): {s} ({d}–{d})\n", .{ s_ns, med.q1, med.q3 });
+    try wr.print("- ops/s median: {s} (≈ {s} {s})\n\n", .{ s_ops, ops_h, unit_suffix(thr.median) });
     try write_md_append(fbs.getWritten());
 }
 
@@ -496,8 +654,12 @@ fn shouldRunMT() bool {
 }
 
 pub fn main() !void {
-    try run_single();
-    if (shouldRunMT()) try run_multi();
+    const mt_threads = detectThreadCount();
+    try run_single(mt_threads);
+    if (shouldRunMT()) {
+        try run_multi(mt_threads);
+        try run_pool_churn_mt(mt_threads);
+    }
     try run_svo_vs_heap();
     try run_downgrade_upgrade();
     try run_pool_churn();

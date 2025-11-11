@@ -4,6 +4,7 @@ const ArcModule = @import("arc.zig");
 const ArcPoolModule = @import("arc_pool.zig");
 
 const ArcU64 = ArcModule.Arc(u64);
+const ArcHeapBytes = ArcModule.Arc([32]u8);
 const PoolValue = struct {
     bytes: [32]u8,
 };
@@ -19,6 +20,21 @@ fn workerClone(_: void, ctx: *WorkerCtx) void {
     while (i < ctx.iterations) : (i += 1) {
         var clone = ctx.shared.clone();
         clone.release();
+    }
+}
+
+const DowngradeCtx = struct {
+    shared: *ArcHeapBytes,
+    iterations: usize,
+};
+
+fn workerDowngrade(_: void, ctx: *DowngradeCtx) void {
+    var i: usize = 0;
+    while (i < ctx.iterations) : (i += 1) {
+        if (ctx.shared.downgrade()) |weak| {
+            if (weak.upgrade()) |tmp| tmp.release();
+            weak.release();
+        }
     }
 }
 
@@ -64,4 +80,28 @@ test "ArcPool recycles heap allocated inners" {
 
     try testing.expectEqual(first_ptr, second_ptr);
     try testing.expectEqual(pattern, arc_two.get().*.bytes);
+}
+
+test "Arc downgrade/upgrade remains stable under contention" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var shared = try ArcHeapBytes.init(allocator, [_]u8{5} ** 32);
+    defer shared.release();
+
+    const threads = 4;
+    const base_iterations: usize = 5_000;
+    var contexts: [threads]DowngradeCtx = undefined;
+    var handles: [threads]std.Thread = undefined;
+
+    for (contexts, 0..) |*ctx, idx| {
+        ctx.* = .{ .shared = &shared, .iterations = base_iterations + idx * 521 };
+        handles[idx] = try std.Thread.spawn(.{}, workerDowngrade, .{ctx});
+    }
+
+    for (handles) |t| t.join();
+
+    try testing.expectEqual(@as(usize, 1), shared.strongCount());
+    try testing.expectEqual(@as(usize, 0), shared.weakCount());
 }
