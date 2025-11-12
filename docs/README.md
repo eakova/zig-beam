@@ -21,7 +21,7 @@ zig build samples-tagged
 
 Minimal example
 ```zig
-const TaggedPointer = @import("zig_beam_utils").tagged_pointer.TaggedPointer;
+const TaggedPointer = @import("zig_beam").Utils.TaggedPointer;
 const Ptr = TaggedPointer(*usize, 1);
 var v: usize = 0;
 const bits = (try Ptr.new(&v, 1)).toUnsigned();
@@ -46,11 +46,11 @@ zig build bench-tlc   # runs _thread_local_cache_benchmarks.zig and updates docs
 ```
 
 Docs
-- Report: [`utils/docs/thread_local_cache_benchmark_results.md`](../docs/thread_local_cache_benchmark_results.md)
+- Report: [`docs/utils/thread_local_cache_benchmark_results.md`](../docs/thread_local_cache_benchmark_results.md)
 
 Minimal example
 ```zig
-const Cache = @import("zig_beam_utils").thread_local_cache.ThreadLocalCache(*usize, null);
+const Cache = @import("zig_beam").Utils.ThreadLocalCache(*usize, null);
 var cache: Cache = .{};
 var x: usize = 1;
 _ = cache.push(&x);
@@ -76,12 +76,12 @@ ARC_BENCH_RUN_MT=1 zig build bench-arc  # also enables multi-thread benchmark
 ```
 
 Docs
-- Report: [`utils/docs/arc_benchmark_results.md`](../docs/arc_benchmark_results.md)
-- Dependency & interaction: [`utils/docs/dependency_graph.md`](../docs/dependency_graph.md)
+- Report: [`docs/utils/arc_benchmark_results.md`](../docs/arc_benchmark_results.md)
+- Dependency & interaction: [`docs/utils/dependency_graph.md`](../docs/dependency_graph.md)
 
 Minimal example
 ```zig
-const Arc = @import("zig_beam_utils").arc.Arc(u64);
+const Arc = @import("zig_beam").Utils.Arc(u64);
 var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
 const alloc = gpa.allocator();
 var a = try Arc.init(alloc, 42); defer a.release();
@@ -137,7 +137,7 @@ $env:ZIG_LOCAL_CACHE_DIR  = "$PWD/.zig-local-cache"
 
 ## Use `utils` In Your Project
 
-Consume the `utils` library via Zig’s package system (recommended). This exposes the wrapper module `zig_beam_utils`, which re‑exports tagged pointer, thread‑local cache, Arc, pool, and cycle detector.
+Consume the `utils` library via Zig’s package system (recommended). This exposes the wrapper module `zig_beam`, which re‑exports the utils library under `Utils`.
 
 1) Add to your `build.zig.zon`
 
@@ -146,7 +146,7 @@ Consume the `utils` library via Zig’s package system (recommended). This expos
     .name = "your-app",
     .version = "0.1.0",
     .dependencies = .{
-        .zig_beam_utils = .{
+        .zig_beam = .{
             .url = "https://github.com/eakova/zig-beam/archive/refs/heads/main.tar.gz",
             // Fill with: zig fetch <url> --save
             .hash = "<fill-with-zig-fetch-output>",
@@ -164,8 +164,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const dep = b.dependency("zig_beam_utils", .{ .target = target, .optimize = optimize });
-    const beam_utils = dep.module("zig_beam_utils");
+    const dep = b.dependency("zig_beam", .{ .target = target, .optimize = optimize });
+    const beam = dep.module("zig_beam");
 
     const exe = b.addExecutable(.{
         .name = "your-app",
@@ -173,7 +173,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("zig_beam_utils", beam_utils);
+    exe.root_module.addImport("zig_beam", beam);
     b.installArtifact(exe);
 }
 ```
@@ -183,14 +183,14 @@ pub fn build(b: *std.Build) void {
 ```zig
 // src/main.zig
 const std = @import("std");
-const utils = @import("zig_beam_utils");
+const beam = @import("zig_beam");
 
 pub fn main() !void {
     // Examples
-    const TaggedPointer = utils.tagged_pointer.TaggedPointer;
-    const ThreadLocalCache = utils.thread_local_cache.ThreadLocalCache;
-    const Arc = utils.arc.Arc;
-    const ArcPool = utils.arc_pool.ArcPool;
+    const TaggedPointer = beam.Utils.TaggedPointer;
+    const ThreadLocalCache = beam.Utils.ThreadLocalCache;
+    const Arc = beam.Utils.Arc;
+    const ArcPool = beam.Utils.ArcPool;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
     const alloc = gpa.allocator();

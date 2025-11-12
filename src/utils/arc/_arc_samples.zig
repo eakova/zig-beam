@@ -108,7 +108,7 @@ test "sample (moderate): makeMut copy-on-write" {
 /// 3. Downgrade references, release strong refs.
 /// 4. Detector should return both nodes.
 pub fn sampleAdvancedPoolAndDetector(allocator: std.mem.Allocator) !usize {
-    var pool = Pool.init(allocator);
+    var pool = Pool.init(allocator, .{});
     defer pool.deinit();
 
     var detector = Detector.init(allocator, traceNode, null);
@@ -162,7 +162,7 @@ test "sample (advanced): pooled cycle detection" {
 /// 2. Each worker runs inside `withThreadCache` so TLS caches flush automatically.
 /// 3. Count how many objects flowed through the pool.
 pub fn sampleAdvancedPoolWithThreadCache(allocator: std.mem.Allocator) !usize {
-    var pool = CounterPool.init(allocator);
+    var pool = CounterPool.init(allocator, .{});
     defer pool.deinit();
 
     var total = std.atomic.Value(usize).init(0);
@@ -190,7 +190,7 @@ pub fn sampleAdvancedPoolWithThreadCache(allocator: std.mem.Allocator) !usize {
 /// Create pooled payloads using in-place initializer (no memcpy).
 pub fn sampleInPlaceInitArcPool(allocator: std.mem.Allocator) !u8 {
     const P = struct { bytes: [4]u8 };
-    var pool = ArcPoolModule.ArcPool(P, false).init(allocator);
+    var pool = ArcPoolModule.ArcPool(P, false).init(allocator, .{});
     defer pool.deinit();
     const init_fn = struct { fn f(p: *P) void { @memset(&p.bytes, 42); } }.f;
     var arc = try pool.createWithInitializer(init_fn);

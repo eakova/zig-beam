@@ -20,107 +20,83 @@
 ## Arc — Single-Threaded
 - Iterations: 50,000,000
 - Latency (ns/op) median (IQR): 0 (0–0)
-- Throughput: 595,238,095,238,095 (≈ 595,238 G/s)
-
-## Arc — Multi-Threaded (4 threads)
-- iters/thread: 50,000,000
-- total pairs: 200,000,000
-- ns/op median (IQR): 0 (0–0)
-- ops/s median: 17,885,976,897,279 (≈ 17,885 G/s)
-
-## ArcPool Multi-Threaded (4 threads, stats=on)
-- iters/thread: 777,843
-- total pairs: 3,111,372
-- ns/op median (IQR): 31 (31–32)
-- ops/s median: 30,914,977 (≈ 30 M/s)
-
-### ArcPool — Multi-Threaded (4 threads)
-| Variant | Iterations | ns/op (median) | Throughput (ops/s) |
-| --- | --- | --- | --- |
-| stats=on (MT) | 3,649,500 | 31.74 | 31.54 M/s |
-| stats=off (MT) | 77,575,760 | 1.03 | 970.57 M/s |
-
-## ArcPool Multi-Threaded (4 threads, stats=off)
-- iters/thread: 19,665,362
-- total pairs: 78,661,448
-- ns/op median (IQR): 1 (1–1)
-- ops/s median: 983,510,539 (≈ 983 M/s)
+- Throughput: 0 (≈ 0 /s)
 
 ## Arc — SVO vs Heap Clone Throughput
 | Variant | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| SVO (u32) | 50,000,000 | <0.01 | 1,204,994.19 G/s |
-| Heap ([64]u8) | 13,862,160 | 4.03 | 248.28 M/s |
+| SVO (u32) | 50,000,000 | <0.01 | 1,190,476.19 G/s |
+| Heap ([64]u8) | 9,049,215 | 4.51 | 225.50 M/s |
 
 ## Arc — Downgrade + Upgrade
 | Operation | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| downgrade+upgrade | 7,282,296 | 7.96 | 125.67 M/s |
+| downgrade+upgrade | 7,206,481 | 7.16 | 139.68 M/s |
 
 ## ArcPool — Heap vs Create/Recycle (stats=on)
 | Scenario | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| direct heap | 15,054 | 4206.43 | 237.76 K/s |
-| ArcPool recycle | 11,789,765 | 3.18 | 314.99 M/s |
+| direct heap | 16,497 | 3869.41 | 258.57 K/s |
+| ArcPool recycle | 14,437,515 | 2.95 | 338.80 M/s |
 
 ## ArcPool — Stats Toggle
 ### Single-Threaded
 | Variant | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| stats=on | 10,212,766 | 3.50 | 287.37 M/s |
-| stats=off | 12,620,527 | 3.20 | 312.68 M/s |
+| stats=on | 12,435,234 | 3.11 | 321.55 M/s |
+| stats=off | 14,787,431 | 2.95 | 338.92 M/s |
 
 ## ArcPool — Cyclic Init (pool.createCyclic, stats=off)
 | Operation | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| createCyclic(Node) | 14,035,088 | 4.40 | 227.31 M/s |
+| createCyclic(Node) | 11,755,026 | 4.19 | 238.53 M/s |
 
 ## ArcPool — In-place vs Copy (stats=off, ST)
 | Variant | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| copy 64B | 13,693,378 | 3.16 | 317.01 M/s |
-| in-place (memset) | 18,798,995 | 3.18 | 314.67 M/s |
+| copy 64B | 15,761,849 | 3.11 | 322.43 M/s |
+| in-place (memset) | 22,092,613 | 2.92 | 342.14 M/s |
 
 ## ArcPool — In-place vs Copy (stats=off, MT)
 | Variant | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| copy 64B (MT) | 81,126,304 | 1.02 | 977.38 M/s |
-| in-place (MT) | 85,081,496 | 0.78 | 1.28 G/s |
+| copy 64B (MT) | 78,128,180 | 1.00 | 1.00 G/s |
+| in-place (MT) | 74,538,792 | 0.76 | 1.31 G/s |
 
 ## ArcPool — TLS Capacity (stats=off) — TLS-heavy churn
 | Capacity | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| 8 | 12,162,146 | 3.10 | 322.68 M/s |
-| 16 | 19,807,341 | 3.19 | 313.63 M/s |
-| 32 | 21,680,217 | 2.87 | 347.86 M/s |
-| 64 | 20,460,359 | 2.89 | 346.65 M/s |
+| 8 | 14,249,007 | 2.97 | 337.05 M/s |
+| 16 | 22,655,873 | 2.93 | 341.03 M/s |
+| 32 | 22,648,689 | 2.67 | 374.50 M/s |
+| 64 | 22,669,911 | 3.44 | 291.18 M/s |
 
 ## ArcPool — TLS Capacity (stats=off) — Bursty cycles (burst=24)
 | Capacity | Items | ns/item (median) | Throughput (items/s) |
 | --- | --- | --- | --- |
-| 8 | 590,064 | 111.57 | 8.96 M/s |
-| 16 | 526,896 | 109.58 | 9.13 M/s |
-| 32 | 587,352 | 112.18 | 8.92 M/s |
-| 64 | 579,504 | 112.90 | 8.86 M/s |
+| 8 | 588,432 | 99.55 | 10.04 M/s |
+| 16 | 616,512 | 106.06 | 9.47 M/s |
+| 32 | 541,608 | 101.99 | 9.81 M/s |
+| 64 | 596,904 | 101.49 | 9.85 M/s |
 
 ## ArcPool — TLS Capacity (stats=off) — Bursty cycles (burst=72, no drain)
 | Capacity | Items | ns/item (median) | Throughput (items/s) |
 | --- | --- | --- | --- |
-| 8 | 1,578,456 | 42.61 | 23.51 M/s |
-| 16 | 1,368,216 | 42.30 | 23.64 M/s |
-| 32 | 1,773,936 | 42.94 | 23.29 M/s |
-| 64 | 1,392,408 | 41.49 | 24.13 M/s |
+| 8 | 1,373,328 | 38.36 | 26.09 M/s |
+| 16 | 1,510,416 | 38.13 | 26.23 M/s |
+| 32 | 1,538,928 | 38.35 | 26.08 M/s |
+| 64 | 1,566,144 | 37.50 | 26.67 M/s |
 
 ## ArcPool — Heap vs Create/Recycle (stats=off)
 | Scenario | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| direct heap | 14,886 | 4012.12 | 249.28 K/s |
-| ArcPool recycle | 14,070,701 | 3.17 | 315.97 M/s |
+| direct heap | 16,867 | 3409.01 | 293.35 K/s |
+| ArcPool recycle | 15,560,812 | 2.92 | 342.19 M/s |
 
 ## ArcPool Split Scenarios (TLS / Global / Allocator)
 | Scenario | Iterations | ns/op (median) | Throughput (ops/s) |
 | --- | --- | --- | --- |
-| TLS only | 11,707,318 | 3.32 | 300.98 M/s |
-| Global only | 10,983,982 | 5.08 | 196.91 M/s |
-| Allocator only | 1,937,047 | 14.38 | 69.53 M/s |
+| TLS only | 13,136,289 | 3.06 | 326.92 M/s |
+| Global only | 10,992,233 | 4.71 | 212.15 M/s |
+| Allocator only | 2,826,856 | 12.65 | 79.03 M/s |
 

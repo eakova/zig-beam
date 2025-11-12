@@ -69,7 +69,7 @@ test "Arc multi-threaded clone/release keeps counts stable" {
 }
 
 test "ArcPool recycles heap allocated inners" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var arc_one = try pool.create(.{ .bytes = [_]u8{0} ** 32 });
@@ -134,7 +134,7 @@ test "Arc newCyclic integrates: self-weak upgrade ok before drop, fails after" {
 test "ArcPool createCyclic integrates: pooled self-weak works and recycles" {
     const Node = struct { weak_self: ArcModule.ArcWeak(@This()) = ArcModule.ArcWeak(@This()).empty() };
     const Pooled = ArcPoolModule.ArcPool(Node, false);
-    var pool = Pooled.init(testing.allocator);
+    var pool = Pooled.init(testing.allocator, .{});
     defer pool.deinit();
 
     const ctor = struct {

@@ -33,7 +33,7 @@ fn run(pool: *Pool, ctx_ptr: *anyopaque) anyerror!void {
 }
 
 test "ArcPool multi-threaded create/recycle" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var counter = std.atomic.Value(usize).init(0);
@@ -53,7 +53,7 @@ test "ArcPool multi-threaded create/recycle" {
 
 test "ArcPool multi-threaded churn reuses L2 under spill" {
     const PoolOn = PoolModule.ArcPool(Payload, true);
-    var pool = PoolOn.init(testing.allocator);
+    var pool = PoolOn.init(testing.allocator, .{});
     defer pool.deinit();
 
     var threads: [2]std.Thread = undefined;
