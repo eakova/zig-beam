@@ -1,3 +1,9 @@
+//! ArcCycleDetector integration tests.
+//! Focus: larger graphs, pool churn, and realistic release orders.
+//! How to run:
+//! - `cd utils && zig test src/arc/cycle-detector/_arc_cycle_detector_integration_tests.zig -OReleaseFast`
+//! - or: `cd utils && zig build -Doptimize=ReleaseFast test`
+
 const std = @import("std");
 const testing = std.testing;
 const ArcModule = @import("arc_core");

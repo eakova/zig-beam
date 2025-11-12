@@ -105,11 +105,8 @@ pub fn ThreadLocalCacheWithCapacity(
         /// The number of items currently in the cache.
         count: usize = 0,
 
-        /// Tries to pop an item from the local cache.
-        /// This is the performance-critical hot path for allocations. It involves no
-        /// locks, atomics, or any form of contention.
-        ///
-        /// Returns the cached item, or `null` if the cache is empty.
+        /// Pop one item from the local cache.
+        /// Hot path: no locks, no atomics. Returns null if empty.
         pub inline fn pop(self: *Self) ?T {
             // This branch is highly predictable by the CPU. In a high-throughput system,
             // the cache will often fluctuate between empty and non-empty states.
@@ -125,10 +122,8 @@ pub fn ThreadLocalCacheWithCapacity(
             return item;
         }
 
-        /// Tries to push an item into the local cache.
-        /// This is the performance-critical hot path for deallocations.
-        ///
-        /// Returns `true` on success, or `false` if the cache is full.
+        /// Push one item into the local cache.
+        /// Returns true on success, false if cache is full.
         pub inline fn push(self: *Self, item: T) bool {
             // This branch is also highly predictable. The cache is either full or not.
             if (self.count >= capacity) {
@@ -142,14 +137,8 @@ pub fn ThreadLocalCacheWithCapacity(
             return true;
         }
 
-        /// Empties the local cache. After this call, `self.len()` is guaranteed to be 0.
-        ///
-        /// BEHAVIOR:
-        /// - If a `recycle_callback` was provided, this function calls the callback
-        ///   for each item before discarding the pointer from the cache.
-        /// - If NO `recycle_callback` was provided, this function simply DISCARDS
-        ///   the pointers, resetting the cache to an empty state. In this scenario,
-        ///   you are responsible for the lifecycle of the objects pointed to.
+        /// Clear the local cache. Guarantees `len() == 0` afterwards.
+        /// If `recycle_callback` exists, call it for each item; otherwise just drop pointers.
         pub fn clear(self: *Self, global_pool_context: ?*anyopaque) void {
             // A single loop correctly and efficiently handles all cases.
             while (self.count > 0) {
@@ -170,17 +159,17 @@ pub fn ThreadLocalCacheWithCapacity(
             // When no callback is provided, `global_pool_context` is ignored by design.
         }
 
-        /// Returns the number of items currently in the cache.
+        /// Number of items currently in the cache.
         pub inline fn len(self: *const Self) usize {
             return self.count;
         }
 
-        /// Returns `true` if the cache is empty.
+        /// True if the cache is empty.
         pub inline fn isEmpty(self: *const Self) bool {
             return self.count == 0;
         }
 
-        /// Returns `true` if the cache is full.
+        /// True if the cache is full.
         pub inline fn isFull(self: *const Self) bool {
             return self.count == capacity;
         }

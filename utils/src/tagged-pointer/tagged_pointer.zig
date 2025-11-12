@@ -80,7 +80,8 @@ pub fn TaggedPointer(
         /// This field is private to enforce use of the safe API.
         value: usize,
 
-        /// Creates a new `TaggedPointer`.
+        /// Create a new tagged pointer.
+        /// Safety: compile-time alignment ensures low bits are free for the tag.
         /// Returns `error.TagTooLarge` if the tag value exceeds the available bits.
         pub fn new(ptr: PointerType, tag: PtrInt) !Self {
             if (tag > tag_mask) {
@@ -94,39 +95,37 @@ pub fn TaggedPointer(
             };
         }
 
-        /// Returns the raw pointer value with the tag bits cleared.
+        /// Get the raw pointer with tag bits cleared.
         pub inline fn getPtr(self: Self) PointerType {
             return @ptrFromInt(self.value & ptr_mask);
         }
 
-        /// Returns the integer value of the tag.
+        /// Get the tag value.
         pub inline fn getTag(self: Self) PtrInt {
             return self.value & tag_mask;
         }
 
-        /// Updates the pointer part of the `TaggedPointer`, preserving the tag.
+        /// Set the pointer, preserving the current tag.
         pub inline fn setPtr(self: *Self, ptr: PointerType) void {
             assert((@intFromPtr(ptr) & tag_mask) == 0);
             const current_tag = self.getTag();
             self.value = @intFromPtr(ptr) | current_tag;
         }
 
-        /// Updates the tag part of the `TaggedPointer`, preserving the pointer.
+        /// Set the tag, preserving the current pointer.
         pub inline fn setTag(self: *Self, tag: PtrInt) void {
             assert(tag <= tag_mask);
             const current_ptr_bits = self.value & ptr_mask;
             self.value = current_ptr_bits | tag;
         }
 
-        /// Returns the raw integer value (pointer + tag).
-        /// Useful for debugging or storage.
+        /// Return the combined integer (pointer + tag) for storage or debugging.
         pub inline fn toUnsigned(self: Self) usize {
             return self.value;
         }
 
-        /// Creates a `TaggedPointer` from a raw integer value.
-        /// This is an unsafe operation as it assumes the value was created
-        /// by a compatible `TaggedPointer`.
+        /// Build a tagged pointer from a stored integer.
+        /// Assumes the value originated from the same `TaggedPointer` type.
         pub inline fn fromUnsigned(value: usize) Self {
             return .{ .value = value };
         }

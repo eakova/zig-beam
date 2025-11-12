@@ -1,5 +1,15 @@
-// FILE: arc_benchmark.zig
-// All comments are in English as requested.
+// FILE: _arc_benchmarks.zig
+//! Benchmarks for Arc and ArcPool.
+//!
+//! Purpose:
+//! - Measure single-threaded and multi-threaded clone/release throughput for Arc.
+//! - Measure ArcPool create/recycle throughput, including stats on/off comparisons.
+//! - Produce a Markdown report under `utils/docs/arc_benchmark_results.md` and
+//!   print a short console summary for quick checks.
+//!
+//! Quick run:
+//! - `cd utils && ARC_BENCH_RUN_MT=1 zig build -Doptimize=ReleaseFast bench-arc`
+//! - Reports: `utils/docs/arc_benchmark_results.md`
 
 const std = @import("std");
 const testing = std.testing;

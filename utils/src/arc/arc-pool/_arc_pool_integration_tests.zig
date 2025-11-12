@@ -1,3 +1,9 @@
+//! ArcPool integration tests.
+//! Focus: multi-threaded churn with TLS caches and L2 reuse under contention.
+//! How to run:
+//! - `cd utils && zig test src/arc/arc-pool/_arc_pool_integration_tests.zig -OReleaseFast`
+//! - or: `cd utils && zig build -Doptimize=ReleaseFast test`
+
 const std = @import("std");
 const testing = std.testing;
 const ArcModule = @import("arc_core");
