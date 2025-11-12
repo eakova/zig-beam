@@ -1,3 +1,9 @@
+//! Arc integration tests.
+//! Focus: multi-threaded clone/release and downgrade/upgrade flows with timing.
+//! How to run:
+//! - `cd utils && zig test src/arc/_arc_integration_tests.zig -OReleaseFast`
+//! - or: `cd utils && zig build -Doptimize=ReleaseFast test`
+
 const std = @import("std");
 const testing = std.testing;
 const ArcModule = @import("arc.zig");

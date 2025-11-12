@@ -99,18 +99,26 @@ pub fn Arc(comptime T: type) type {
         storage: Storage align(storage_align),
 
         // --- Private Helper Methods for SVO ---
+        /// Returns true if this Arc stores the value inline (SVO path).
+        /// Inline arcs do not allocate and always have an implicit strong count of 1.
         pub fn isInline(self: *const Self) bool {
             if (comptime use_svo) return true;
             return self.storage.ptr_with_tag & 1 == TAG_INLINE;
         }
+        /// Returns the pointer to the heap `Inner` block.
+        /// Precondition: `!isInline()`.
         pub fn asPtr(self: *const Self) *Inner {
             assert(!self.isInline());
             return InnerTaggedPtr.fromUnsigned(self.storage.ptr_with_tag).getPtr();
         }
+        /// Returns a const pointer to the inline payload.
+        /// Precondition: `isInline()`.
         fn asInline(self: *const Self) *const T {
             assert(self.isInline());
             return @ptrCast(@alignCast(&self.storage.inline_data));
         }
+        /// Returns a mutable pointer to the inline payload.
+        /// Precondition: `isInline()`.
         fn asInlineMut(self: *Self) *T {
             assert(self.isInline());
             return @ptrCast(@alignCast(&self.storage.inline_data));
@@ -118,6 +126,8 @@ pub fn Arc(comptime T: type) type {
 
         // --- Public API Methods ---
 
+        /// Create a new Arc from a value.
+        /// SVO types are stored inline; otherwise a heap `Inner` block is allocated.
         pub fn init(allocator: Allocator, value: T) !Self {
             if (comptime use_svo) {
                 var self: Self = undefined;
@@ -137,6 +147,8 @@ pub fn Arc(comptime T: type) type {
             }
         }
 
+        /// Create a new Arc and initialize the payload in-place via `initializer`.
+        /// Avoids copying large `T` values.
         pub fn initWithInitializer(allocator: Allocator, initializer: *const fn (*T) void) !Self {
             if (comptime use_svo) {
                 var self: Self = undefined;
@@ -156,6 +168,8 @@ pub fn Arc(comptime T: type) type {
             }
         }
 
+        /// Fallible variant of `initWithInitializer`.
+        /// If `initializer` errors, the allocation is freed and the error is returned.
         pub fn initWithInitializerFallible(allocator: Allocator, initializer: *const fn (*T) anyerror!void) !Self {
             if (comptime use_svo) {
                 var self: Self = undefined;
@@ -214,6 +228,8 @@ pub fn Arc(comptime T: type) type {
             }.wrap);
         }
 
+        /// Increase the strong count and return another Arc to the same value.
+        /// For inline arcs, this is a cheap copy.
         pub inline fn clone(self: *const Self) Self {
             if (self.isInline()) return self.*;
             const inner = self.asPtr();
@@ -225,6 +241,8 @@ pub fn Arc(comptime T: type) type {
             return .{ .storage = self.storage };
         }
 
+        /// Drop one strong reference. When the last strong drops, runs `deinit`
+        /// on `T` if present, and destroys the `Inner` when no weaks remain.
         pub inline fn release(self: Self) void {
             if (self.isInline()) return;
             const inner = self.asPtr();
@@ -260,21 +278,26 @@ pub fn Arc(comptime T: type) type {
             }
         }
 
+        /// Borrow a const pointer to the payload.
         pub inline fn get(self: *const Self) *const T {
             if (self.isInline()) return self.asInline();
             return &self.asPtr().data;
         }
 
+        /// Current strong reference count (1 for inline arcs).
         pub fn strongCount(self: *const Self) usize {
             if (self.isInline()) return 1;
             return self.asPtr().counters.strong_count.load(.monotonic);
         }
 
+        /// Current weak reference count (0 for inline arcs).
         pub fn weakCount(self: *const Self) usize {
             if (self.isInline()) return 0;
             return self.asPtr().counters.weak_count.load(.monotonic);
         }
 
+        /// Convert a strong reference into a weak reference without changing
+        /// liveness. Returns null if already deallocated.
         pub inline fn downgrade(self: *const Self) ?ArcWeak(T) {
             if (self.isInline()) return null;
             const inner = self.asPtr();
@@ -291,6 +314,8 @@ pub fn Arc(comptime T: type) type {
             return null;
         }
 
+        /// Try to take ownership of the payload. Succeeds only when this is the
+        /// unique strong owner. Otherwise returns error.NotUnique.
         pub fn tryUnwrap(self: Self) !T {
             if (self.isInline()) return self.asInline().*;
             const inner = self.asPtr();
@@ -300,6 +325,8 @@ pub fn Arc(comptime T: type) type {
             return value;
         }
 
+        /// Get a mutable pointer if this Arc is the unique strong owner.
+        /// For inline arcs, always returns the inline pointer.
         pub fn getMutUnique(self: *Self) ?*T {
             if (self.isInline()) return self.asInlineMut();
             if (self.asPtr().counters.strong_count.load(.monotonic) == 1) {
@@ -308,6 +335,8 @@ pub fn Arc(comptime T: type) type {
             return null;
         }
 
+        /// Ensure unique ownership; if shared, clone the payload with `cloneFn`.
+        /// Returns a mutable pointer to the owned payload.
         pub fn makeMutWith(self: *Self, cloneFn: *const fn (Allocator, *const T) anyerror!T) !*T {
             if (self.isInline()) return self.asInlineMut();
             if (self.asPtr().counters.strong_count.load(.monotonic) == 1) {
@@ -321,6 +350,8 @@ pub fn Arc(comptime T: type) type {
             return &self.asPtr().data;
         }
 
+        /// Ensure unique ownership with a default copy for plain data types.
+        /// Use `makeMutWith` for types that need a custom clone.
         pub fn makeMut(self: *Self) !*T {
             comptime if (!isPlainData(T)) {
                 @compileError("makeMut can only be used with simple data types. Use makeMutWith for complex types like " ++ @typeName(T));
@@ -328,10 +359,12 @@ pub fn Arc(comptime T: type) type {
             return self.makeMutWith(defaultClone);
         }
 
+        /// Default clone function for plain data.
         fn defaultClone(_: Allocator, data: *const T) anyerror!T {
             return data.*;
         }
 
+        /// Alias for `init` for API familiarity.
         pub inline fn new(allocator: Allocator, value: T) !Self {
             return init(allocator, value);
         }

@@ -85,12 +85,15 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         };
         threadlocal var tls_flush: FlushBuf = .{};
 
+        /// Pick a shard index for the current thread.
+        /// Uses pool and TLS addresses to spread contention.
         fn shardIndex(self: *const Self) usize {
             const a = @intFromPtr(self);
             const b = @intFromPtr(&tls_cache);
             return (a ^ b) & (self.active_shards - 1);
         }
 
+        /// Push a linked chain [head..tail] to the shard freelist with one CAS.
         fn pushChain(self: *Self, shard: usize, head_node: *InnerType, tail_node: *InnerType) void {
             var head = self.freelists[shard].load(.monotonic);
             while (true) {
@@ -105,6 +108,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Initializes a new `ArcPool`.
+        /// Initialize the pool. Chooses shard count and TLS effective capacity
+        /// based on CPU count and `T` size. Warms a couple of nodes to smooth bursts.
         pub fn init(allocator: Allocator) Self {
             // Helper to compute effective TLS capacity (kept here for easy future tuning).
             const computeTlsCapacity = struct {
@@ -168,6 +173,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         /// Deinitializes the pool, freeing all cached memory.
         /// WARNING: This is NOT thread-safe. It must be called only after all
         /// threads using the pool have terminated and joined.
+        /// Destroy the pool and free all cached nodes.
+        /// Not thread-safe; ensure all threads have stopped using the pool.
         pub fn deinit(self: *Self) void {
             // Step 1: Drain the current thread's local cache into the global freelist.
             tls_cache.clear(self);
@@ -206,6 +213,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         /// This keeps behavior conservative and avoids rare instability seen with
         /// chain-pop under heavy MT churn. We still keep the function indirection
         /// so we can re-introduce chain-pop later behind a flag.
+        /// Pop one node from a shard (Treiber pop). If empty, round-robin steal
+        /// from other shards. Returns null if all shards are empty.
         fn popBatchOne(self: *Self, shard_in: usize) ?*InnerType {
             var shard = shard_in;
             var attempts: usize = 0;
@@ -227,6 +236,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Creates a new `Arc<T>`, reusing a recycled object if available.
+        /// Fast path create: L1 (TLS) → L2 (sharded freelists) → L3 (allocator).
+        /// SVO types bypass the pool entirely.
         pub fn create(self: *Self, value: T) !Arc(T) {
             // If the Arc uses Small Value Optimization, the pool is irrelevant.
             // Create it directly and return.
@@ -268,6 +279,7 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Create with in-place initializer (non-fallible).
+        /// Create with in-place initializer to avoid copying `T`.
         pub fn createWithInitializer(self: *Self, initializer: *const fn (*T) void) !Arc(T) {
             if (comptime Arc(T).use_svo) {
                 return Arc(T).initWithInitializer(self.allocator, initializer);
@@ -300,6 +312,7 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Create with in-place initializer (fallible).
+        /// Fallible in-place creation. Reuses TLS/L2 nodes when available.
         pub fn createWithInitializerFallible(self: *Self, initializer: *const fn (*T) anyerror!void) !Arc(T) {
             if (comptime Arc(T).use_svo) {
                 return Arc(T).initWithInitializerFallible(self.allocator, initializer);
@@ -340,6 +353,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Create a cyclic Arc via pool using a constructor that receives a temporary Weak.
+        /// Create a cyclic Arc using a temporary weak during construction.
+        /// Mirrors Arc.newCyclic for pool-backed allocations.
         pub fn createCyclic(self: *Self, ctor: *const fn (ArcWeak(T)) anyerror!T) !Arc(T) {
             if (comptime Arc(T).use_svo) {
                 @compileError("ArcPool.createCyclic requires heap Arc; SVO is not supported");
@@ -378,6 +393,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
 
         /// Recycles an `Arc` back into the pool for future reuse.
         /// For SVO'd Arcs, this is a no-op.
+        /// Return a heap Arc to the pool. TLS absorbs the fast path; overflows
+        /// are batched to the owning shard to reduce CAS traffic.
         pub fn recycle(self: *Self, arc: Arc(T)) void {
             // SVO values live on the stack and are not pooled. Do nothing.
             if (arc.isInline()) return;
@@ -425,6 +442,7 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
 
         /// Allows the current thread to flush its L1 cache back into the pool.
         /// Useful for tests to avoid leaking objects when threads exit.
+        /// Flush the current thread’s TLS cache and pending batch into L2.
         pub fn drainThreadCache(self: *Self) void {
             tls_cache.clear(self);
             if (tls_flush.count > 0) {
@@ -444,6 +462,8 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         }
 
         /// Runs `body` with automatic thread-local cache draining.
+        /// Run `body(self, ctx)` ensuring the thread-local cache is flushed on exit.
+        /// Useful for worker threads to contain bursts.
         pub fn withThreadCache(self: *Self, body: fn (*Self, *anyopaque) anyerror!void, ctx: *anyopaque) !void {
             defer self.drainThreadCache();
             try body(self, ctx);

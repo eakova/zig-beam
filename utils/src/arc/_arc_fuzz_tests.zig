@@ -1,5 +1,13 @@
-// FILE: fuzz_test.zig
-// All comments are in English as requested.
+// FILE: _arc_fuzz_tests.zig
+//! Concurrency fuzz test for Arc/ArcWeak.
+//!
+//! Goal:
+//! - Exercise clone/release/downgrade/upgrade interleavings across many threads.
+//! - Shake out use-after-free and leak bugs under random operation mixes.
+//!
+//! How to run:
+//! - `cd utils && zig test src/arc/_arc_fuzz_tests.zig -OReleaseFast`
+//! - Optional: override counts via build options (see `std.options`).
 
 const std = @import("std");
 const testing = std.testing;

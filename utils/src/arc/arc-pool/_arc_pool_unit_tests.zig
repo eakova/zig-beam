@@ -1,3 +1,9 @@
+//! ArcPool unit tests.
+//! Focus: reuse vs fresh alloc, SVO bypass, drain semantics.
+//! How to run:
+//! - `cd utils && zig test src/arc/arc-pool/_arc_pool_unit_tests.zig -OReleaseFast`
+//! - or: `cd utils && zig build -Doptimize=ReleaseFast test`
+
 const std = @import("std");
 const testing = std.testing;
 const ArcModule = @import("arc_core");

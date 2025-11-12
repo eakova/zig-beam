@@ -63,6 +63,7 @@ pub fn ArcCycleDetector(comptime T: type) type {
         /// - `allocator`: Used for the detector's internal data structures.
         /// - `trace_fn`: The crucial user-provided function to traverse `T`.
         /// - `trace_context`: An optional context pointer for `trace_fn`.
+        /// Construct a detector with the given `trace_fn` and optional context.
         pub fn init(allocator: Allocator, trace_fn: TraceFn, trace_context: ?*anyopaque) Self {
             return .{
                 .allocator = allocator,
@@ -72,12 +73,15 @@ pub fn ArcCycleDetector(comptime T: type) type {
         }
 
         /// Deinitializes the detector, freeing its internal lists.
+        /// Free internal lists and reset the detector.
         pub fn deinit(self: *Self) void {
             self.tracked_arcs.deinit(self.allocator);
         }
 
         /// Registers a new `Arc` to be tracked by the detector.
         /// Inline (SVO) `Arc`s cannot be part of a heap-based cycle and are ignored.
+        /// Track an `Arc<T>` that may participate in a cycle.
+        /// Inline arcs are ignored as they cannot be in heap cycles.
         pub fn track(self: *Self, arc: Arc(T)) !void {
             defer arc.release();
             if (arc.isInline()) {
@@ -93,6 +97,8 @@ pub fn ArcCycleDetector(comptime T: type) type {
 
         /// Runs the mark-and-sweep algorithm to find and return a list of `Arc`s
         /// that are part of unreachable reference cycles.
+        /// Run mark-and-sweep to find unreachable islands kept alive by cycles.
+        /// Returns a list of cloned `Arc<T>`s that represent members of cycles.
         pub fn detectCycles(self: *Self) !CycleList {
             // First, remove any arcs that have already been deallocated naturally.
             self.pruneDeadArcs();
@@ -159,6 +165,7 @@ pub fn ArcCycleDetector(comptime T: type) type {
         }
 
         /// Internal helper to remove pointers to deallocated `Inner` blocks from the tracking list.
+        /// Drop entries whose inner blocks have already been fully destroyed.
         fn pruneDeadArcs(self: *Self) void {
             var i: usize = 0;
             while (i < self.tracked_arcs.items.len) {
