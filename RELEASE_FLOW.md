@@ -9,7 +9,7 @@ This document describes how we cut and publish releases for the repository.
 
 ### Freeze and Verify
 1) Freeze `main` for release preparation (accept only release‑related changes).
-2) Ensure docs and reports are up to date under `utils/docs/`.
+2) Ensure docs and reports are up to date under `docs/utils/`.
 3) Run tests and benches in ReleaseFast:
    - `cd utils`
    - `ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache ZIG_LOCAL_CACHE_DIR=$PWD/.zig-local-cache zig build -Doptimize=ReleaseFast test`
@@ -24,7 +24,7 @@ This document describes how we cut and publish releases for the repository.
    - `git tag v0.3.0`
    - `git push origin v0.3.0`
 
-Pushing a `v*` tag triggers the GitHub Action at `.github/workflows/release-draft.yml`, which creates a draft GitHub Release and attaches benchmark reports from `utils/docs/*.md`.
+Pushing a `v*` tag triggers the GitHub Action at `.github/workflows/release-draft.yml`, which creates a draft GitHub Release and attaches benchmark reports from `docs/utils/*.md`.
 
 ### Hotfixes
 1) Fix on the maintenance branch:
@@ -54,4 +54,3 @@ const utils = @import("utils");
 ### Notes
 - Benchmarks are expected to finish under one minute in `-Doptimize=ReleaseFast`.
 - Keep Zig caches out of Git: `.gitignore` already excludes zig caches at any depth.
-
