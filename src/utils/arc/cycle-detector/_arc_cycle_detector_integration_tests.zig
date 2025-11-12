@@ -50,7 +50,7 @@ fn workerChurn(ctx: *WorkerCtx) void {
 }
 
 test "ArcCycleDetector detects cycles built from pooled arcs" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var detector = Detector.init(testing.allocator, traceNode, null);
@@ -86,7 +86,7 @@ test "ArcCycleDetector detects cycles built from pooled arcs" {
 }
 
 test "ArcCycleDetector prunes pooled nodes once references are cleared" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var detector = Detector.init(testing.allocator, traceNode, null);
@@ -161,7 +161,7 @@ test "ArcCycleDetector handles mixed multi-node graphs" {
 }
 
 test "ArcCycleDetector survives pool churn with thread-local caches" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var detector = Detector.init(testing.allocator, traceNode, null);
@@ -222,7 +222,7 @@ fn workerTrack(ctx: *PoolCtx) void {
 }
 
 test "ArcCycleDetector scales with pooled tracking across threads" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var detector = Detector.init(testing.allocator, traceNode, null);
@@ -305,7 +305,7 @@ test "ArcCycleDetector ignores self-weak from ArcPool.createCyclic" {
     var detector = DetectorC_Pool.init(testing.allocator, traceC_Pool, null);
     defer detector.deinit();
 
-    var pool = PoolC_Pool.init(testing.allocator);
+    var pool = PoolC_Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     const ctor = struct { fn f(w: ArcModule.ArcWeak(NodeC_Pool)) anyerror!NodeC_Pool { return NodeC_Pool{ .weak_self = w, }; } }.f;

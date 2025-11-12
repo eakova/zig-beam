@@ -7,9 +7,9 @@ Date: {{DATE}}
 This is a draft release for tag {{TAG}}.
 
 ## Reports
-- Arc benchmarks: utils/docs/arc_benchmark_results.md
-- Thread‑Local Cache benchmarks: utils/docs/thread_local_cache_benchmark_results.md
-- Dependency graph: utils/docs/dependency_graph.md
+- Arc benchmarks: docs/utils/arc_benchmark_results.md
+- Thread‑Local Cache benchmarks: docs/utils/thread_local_cache_benchmark_results.md
+- Dependency graph: docs/utils/dependency_graph.md
 
 ## Quick Start (pin by tag)
 ```bash
@@ -27,4 +27,3 @@ In code:
 ```zig
 const utils = @import("utils");
 ```
-

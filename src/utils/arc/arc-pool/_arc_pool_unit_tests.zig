@@ -13,7 +13,7 @@ const Payload = struct { bytes: [32]u8 };
 const Pool = PoolModule.ArcPool(Payload, false);
 
 test "ArcPool reuses recycled nodes" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var arc1 = try pool.create(.{ .bytes = [_]u8{1} ** 32 });
@@ -30,7 +30,7 @@ test "ArcPool reuses recycled nodes" {
 
 test "ArcPool bypasses SVO types" {
     const SvoPool = PoolModule.ArcPool(u8, false);
-    var pool = SvoPool.init(testing.allocator);
+    var pool = SvoPool.init(testing.allocator, .{});
     defer pool.deinit();
 
     const arc = try pool.create(55);
@@ -58,7 +58,7 @@ fn fillAndError(pool: *Pool, raw_ctx: *anyopaque) anyerror!void {
 }
 
 test "ArcPool.withThreadCache drains TLS on error" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     var stored: [4]?*InnerPtr = [_]?*InnerPtr{null} ** 4;
@@ -84,7 +84,7 @@ test "ArcPool.withThreadCache drains TLS on error" {
 }
 
 test "ArcPool createWithInitializer writes payload in-place" {
-    var pool = Pool.init(testing.allocator);
+    var pool = Pool.init(testing.allocator, .{});
     defer pool.deinit();
 
     const init_fn = struct { fn f(p: *Payload) void { @memset(&p.bytes, 7); } }.f;
@@ -97,7 +97,7 @@ test "ArcPool createWithInitializer writes payload in-place" {
 test "ArcPool enforces TLS capacity and early flush pushes to L2" {
     // Use stats=on to observe L2 reuse counter.
     const PoolOn = PoolModule.ArcPool(Payload, true);
-    var pool = PoolOn.init(testing.allocator);
+    var pool = PoolOn.init(testing.allocator, .{});
     defer pool.deinit();
 
     const tls_cap = pool.tls_active_capacity;
@@ -133,7 +133,7 @@ test "ArcPool enforces TLS capacity and early flush pushes to L2" {
 test "ArcPool createCyclic builds self-weak and upgrades before drop" {
     const Node = struct { weak_self: ArcModule.ArcWeak(@This()) = ArcModule.ArcWeak(@This()).empty() };
     const NodePool = PoolModule.ArcPool(Node, false);
-    var pool = NodePool.init(testing.allocator);
+    var pool = NodePool.init(testing.allocator, .{});
     defer pool.deinit();
 
     const make_node = struct {

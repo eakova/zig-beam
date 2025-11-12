@@ -4,23 +4,21 @@
 //! Purpose:
 //! - Measure single-threaded and multi-threaded clone/release throughput for Arc.
 //! - Measure ArcPool create/recycle throughput, including stats on/off comparisons.
-//! - Produce a Markdown report under `utils/docs/arc_benchmark_results.md` and
+//! - Produce a Markdown report under `docs/utils/arc_benchmark_results.md` and
 //!   print a short console summary for quick checks.
 //!
 //! Quick run:
-//! - `cd utils && ARC_BENCH_RUN_MT=1 zig build -Doptimize=ReleaseFast bench-arc`
-//! - Reports: `utils/docs/arc_benchmark_results.md`
+//! - `ARC_BENCH_RUN_MT=1 zig build -Doptimize=ReleaseFast bench-arc`
+//! - Reports: `docs/utils/arc_benchmark_results.md`
 
 const std = @import("std");
 const testing = std.testing;
 const Thread = std.Thread;
 const Timer = std.time.Timer;
-const utils = @import("zig_beam_utils");
-
-const ArcModule = utils.arc;
-const ArcU64 = ArcModule.Arc(u64);
-const ArcArray64 = ArcModule.Arc([64]u8);
-const ArcPoolModule = utils.arc_pool;
+const beam = @import("zig_beam");
+const ArcU64 = beam.Utils.Arc(u64);
+const ArcArray64 = beam.Utils.Arc([64]u8);
+const ArcPoolModule = beam.Utils;
 
 // --- Benchmark Configuration ---
 // The number of clone/release pairs to perform in each benchmark run.
@@ -29,7 +27,7 @@ const DEFAULT_MT_THREADS: usize = 4;
 const MIN_MT_THREADS: usize = 2;
 const MAX_MT_THREADS: usize = 16;
 
-const MD_PATH = "docs/arc_benchmark_results.md";
+const MD_PATH = "docs/utils/arc_benchmark_results.md";
 
 fn write_md_truncate(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });
@@ -286,7 +284,7 @@ fn getAllocator() std.mem.Allocator {
 
 fn benchCloneReleaseType(comptime T: type, value: T, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
     const allocator = getAllocator();
-    const ArcType = ArcModule.Arc(T);
+    const ArcType = beam.Utils.Arc(T);
     const pilot_iters: u64 = 100_000;
 
     var arc_pilot = try ArcType.init(allocator, value);
@@ -584,7 +582,7 @@ pub fn run_multi(thread_count: usize) !void {
 }
 
 fn benchDowngradeUpgrade(comptime T: type, value: T, target_ms: u64, repeats: usize) !struct { stats: Stats, iterations: u64 } {
-    const ArcType = ArcModule.Arc(T);
+    const ArcType = beam.Utils.Arc(T);
     const allocator = getAllocator();
     const pilot_iters: u64 = 50_000;
 
@@ -726,7 +724,7 @@ fn benchPoolChurnMTOn(thread_count: usize, target_ms: u64, repeats: usize) !stru
     const allocator = getAllocator();
     const pilot_iters: u64 = 20_000;
 
-    var pilot_pool = PoolTypeOn.init(allocator);
+    var pilot_pool = PoolTypeOn.init(allocator, .{});
     const pilot_ns = try measurePoolChurnMTOn(&pilot_pool, allocator, thread_count, pilot_iters);
     pilot_pool.deinit();
 
@@ -736,7 +734,7 @@ fn benchPoolChurnMTOn(thread_count: usize, target_ms: u64, repeats: usize) !stru
     var stats = Stats{};
     var rep: usize = 0;
     while (rep < repeats) : (rep += 1) {
-        var pool = PoolTypeOn.init(allocator);
+        var pool = PoolTypeOn.init(allocator, .{});
         const ns = try measurePoolChurnMTOn(&pool, allocator, thread_count, per_thread_iters);
         pool.deinit();
         record(&stats, total_iters, ns);
@@ -749,7 +747,7 @@ fn benchPoolChurnMTOff(thread_count: usize, target_ms: u64, repeats: usize) !str
     const allocator = getAllocator();
     const pilot_iters: u64 = 20_000;
 
-    var pilot_pool = PoolTypeOff.init(allocator);
+    var pilot_pool = PoolTypeOff.init(allocator, .{});
     const pilot_ns = try measurePoolChurnMTOff(&pilot_pool, allocator, thread_count, pilot_iters);
     pilot_pool.deinit();
 
@@ -759,7 +757,7 @@ fn benchPoolChurnMTOff(thread_count: usize, target_ms: u64, repeats: usize) !str
     var stats = Stats{};
     var rep: usize = 0;
     while (rep < repeats) : (rep += 1) {
-        var pool = PoolTypeOff.init(allocator);
+        var pool = PoolTypeOff.init(allocator, .{});
         const ns = try measurePoolChurnMTOff(&pool, allocator, thread_count, per_thread_iters);
         pool.deinit();
         record(&stats, total_iters, ns);
@@ -837,7 +835,7 @@ pub fn run_downgrade_upgrade() !void {
 
 /// Compare raw heap allocations vs ArcPool reuse (single-threaded).
 pub fn run_pool_churn() !void {
-    var pool = ArcPoolModule.ArcPool([64]u8, true).init(getAllocator());
+    var pool = ArcPoolModule.ArcPool([64]u8, true).init(getAllocator(), .{});
     defer pool.deinit();
 
     const raw_result = try benchRawHeapChurn([_]u8{9} ** 64, 60, 2);
@@ -865,7 +863,7 @@ pub fn run_pool_churn() !void {
 
 /// Compare raw heap allocations vs ArcPool reuse (single-threaded), stats disabled.
 pub fn run_pool_churn_off() !void {
-    var pool_off = ArcPoolModule.ArcPool([64]u8, false).init(getAllocator());
+    var pool_off = ArcPoolModule.ArcPool([64]u8, false).init(getAllocator(), .{});
     defer pool_off.deinit();
 
     const raw_result = try benchRawHeapChurn([_]u8{9} ** 64, 60, 2);
@@ -1031,9 +1029,9 @@ fn burstyMeasureCapacity(
 
 pub fn run_pool_stats_toggle() !void {
     const allocator = getAllocator();
-    var pool_on = PoolTypeOn.init(allocator);
+    var pool_on = PoolTypeOn.init(allocator, .{});
     defer pool_on.deinit();
-    var pool_off = PoolTypeOff.init(allocator);
+    var pool_off = PoolTypeOff.init(allocator, .{});
     defer pool_off.deinit();
 
     const on_result = try benchPoolChurnGeneric(PoolTypeOn, &pool_on, [_]u8{7} ** 64, 60, 2);
@@ -1071,11 +1069,11 @@ pub fn run_pool_stats_toggle() !void {
 /// Cyclic init benchmark: measure pool.createCyclic cost (stats=off).
 pub fn run_pool_cyclic_init() !void {
     const allocator = getAllocator();
-    var pool = PoolTypeOff.init(allocator);
+    var pool = PoolTypeOff.init(allocator, .{});
     defer pool.deinit();
 
     const ctor = struct {
-        fn f(w: ArcModule.ArcWeak(PoolPayload)) anyerror!PoolPayload {
+        fn f(w: beam.Utils.ArcWeak(PoolPayload)) anyerror!PoolPayload {
             _ = w; // store nothing; just return a payload
             return [_]u8{1} ** PoolPayloadLen;
         }
@@ -1123,7 +1121,7 @@ pub fn run_pool_cyclic_init() !void {
 /// In-place initializer vs copy(64B) comparison using stats=off pool.
 pub fn run_pool_inplace_vs_copy(thread_count: usize) !void {
     const allocator = getAllocator();
-    var pool_off = PoolTypeOff.init(allocator);
+    var pool_off = PoolTypeOff.init(allocator, .{});
     defer pool_off.deinit();
 
     // ST: copy baseline
@@ -1173,7 +1171,7 @@ pub fn run_pool_inplace_vs_copy(thread_count: usize) !void {
 
     // MT: in-place init measure
     const pilot_mt: u64 = 20_000;
-    var pool_mt = PoolTypeOff.init(allocator);
+    var pool_mt = PoolTypeOff.init(allocator, .{});
     const pilot_ns_mt = try measurePoolChurnMTOff(&pool_mt, allocator, thread_count, pilot_mt);
     pool_mt.deinit();
     const per_thread_iters = scale_iters(pilot_mt, pilot_ns_mt, 120);
@@ -1183,7 +1181,7 @@ pub fn run_pool_inplace_vs_copy(thread_count: usize) !void {
         var s = Stats{};
         var r: usize = 0;
         while (r < 2) : (r += 1) {
-            var pool = PoolTypeOff.init(allocator);
+            var pool = PoolTypeOff.init(allocator, .{});
             const ns = try measurePoolChurnMTOffInplace(&pool, allocator, thread_count, per_thread_iters);
             pool.deinit();
             record(&s, total_iters, ns);
@@ -1252,13 +1250,13 @@ fn poolWorkerOffInit(ctx: *PoolWorkerCtxOff) void {
 pub fn run_pool_tls_capacity_compare() !void {
     const allocator = getAllocator();
     // TLS-heavy churn (simple create/recycle loop)
-    var p8 = PoolOff8.init(allocator);
+    var p8 = PoolOff8.init(allocator, .{});
     defer p8.deinit();
-    var p16 = PoolOff16.init(allocator);
+    var p16 = PoolOff16.init(allocator, .{});
     defer p16.deinit();
-    var p32 = PoolOff32.init(allocator);
+    var p32 = PoolOff32.init(allocator, .{});
     defer p32.deinit();
-    var p64 = PoolOff64.init(allocator);
+    var p64 = PoolOff64.init(allocator, .{});
     defer p64.deinit();
 
     const r8 = try benchPoolChurnGeneric(PoolOff8, &p8, [_]u8{1} ** PoolPayloadLen, 60, 2);
@@ -1288,13 +1286,13 @@ pub fn run_pool_tls_capacity_compare() !void {
     std.debug.print("TLS capacity (ST) throughput: 8={s} {s}, 16={s} {s}, 32={s} {s}, 64={s} {s}\n",
         .{ fmt_rate_human(&tb8, thr8.median), unit_suffix(thr8.median), fmt_rate_human(&tb16, thr16.median), unit_suffix(thr16.median), fmt_rate_human(&tb32, thr32.median), unit_suffix(thr32.median), fmt_rate_human(&tb64, thr64.median), unit_suffix(thr64.median) });
 
-    var p8b = PoolOff8.init(allocator);
+    var p8b = PoolOff8.init(allocator, .{});
     defer p8b.deinit();
-    var p16b = PoolOff16.init(allocator);
+    var p16b = PoolOff16.init(allocator, .{});
     defer p16b.deinit();
-    var p32b = PoolOff32.init(allocator);
+    var p32b = PoolOff32.init(allocator, .{});
     defer p32b.deinit();
-    var p64b = PoolOff64.init(allocator);
+    var p64b = PoolOff64.init(allocator, .{});
     defer p64b.deinit();
 
     const burst: usize = 24; // bigger than 8 and 16
@@ -1324,13 +1322,13 @@ pub fn run_pool_tls_capacity_compare() !void {
         .{ fmt_rate_human(&bb8, bthr8.median), unit_suffix(bthr8.median), fmt_rate_human(&bb16, bthr16.median), unit_suffix(bthr16.median), fmt_rate_human(&bb32, bthr32.median), unit_suffix(bthr32.median), fmt_rate_human(&bb64, bthr64.median), unit_suffix(bthr64.median) });
 
     // Second burst scenario: burst=72, no TLS drain between repeats.
-    var p8c = PoolOff8.init(allocator);
+    var p8c = PoolOff8.init(allocator, .{});
     defer p8c.deinit();
-    var p16c = PoolOff16.init(allocator);
+    var p16c = PoolOff16.init(allocator, .{});
     defer p16c.deinit();
-    var p32c = PoolOff32.init(allocator);
+    var p32c = PoolOff32.init(allocator, .{});
     defer p32c.deinit();
-    var p64c = PoolOff64.init(allocator);
+    var p64c = PoolOff64.init(allocator, .{});
     defer p64c.deinit();
 
     const burst2: usize = 72;
@@ -1442,7 +1440,7 @@ fn benchPoolGlobalOnly(pool: *PoolTypeOn, target_ms: u64, repeats: usize) !Bench
 
 fn benchPoolAllocOnly(target_ms: u64, repeats: usize) !BenchRes {
     const allocator = getAllocator();
-    var pool = PoolTypeOn.init(allocator);
+    var pool = PoolTypeOn.init(allocator, .{});
     defer pool.deinit();
     const payload = [_]u8{2} ** PoolPayloadLen;
 
@@ -1484,11 +1482,11 @@ fn benchPoolAllocOnly(target_ms: u64, repeats: usize) !BenchRes {
 }
 
 pub fn run_pool_split_scenarios() !void {
-    var pool_tls = PoolTypeOn.init(getAllocator());
+    var pool_tls = PoolTypeOn.init(getAllocator(), .{});
     defer pool_tls.deinit();
     const tls = try benchPoolTlsOnly(&pool_tls, 60, 2);
 
-    var pool_global = PoolTypeOn.init(getAllocator());
+    var pool_global = PoolTypeOn.init(getAllocator(), .{});
     defer pool_global.deinit();
     const global = try benchPoolGlobalOnly(&pool_global, 60, 2);
 

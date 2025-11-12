@@ -3,7 +3,8 @@
 //! 1) warm up, 2) scale iterations, 3) record stats, 4) print + write docs.
 
 const std = @import("std");
-const cache_mod = @import("thread_local_cache.zig");
+const beam = @import("zig_beam");
+const cache_mod = beam.Utils;
 
 // Simple item to cache. We only traffic in pointers to this.
 const Item = struct { id: usize };
@@ -21,7 +22,7 @@ fn recycle_atomic(ctx: ?*anyopaque, _: *Item) void {
 const CacheNoCb = cache_mod.ThreadLocalCache(*Item, null);
 const CacheWithCb = cache_mod.ThreadLocalCache(*Item, recycle_atomic);
 
-const MD_PATH = "docs/thread_local_cache_benchmark_results.md";
+const MD_PATH = "docs/utils/thread_local_cache_benchmark_results.md";
 
 fn md_truncate_write(content: []const u8) !void {
     var file = try std.fs.cwd().createFile(MD_PATH, .{ .truncate = true });

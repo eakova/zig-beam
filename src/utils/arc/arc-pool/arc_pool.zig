@@ -85,6 +85,12 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         };
         threadlocal var tls_flush: FlushBuf = .{};
 
+        /// Initialization options
+        pub const Options = struct {
+            /// Override detected logical CPU count used to size shard count.
+            logical_cpus: ?usize = null,
+        };
+
         /// Pick a shard index for the current thread.
         /// Uses pool and TLS addresses to spread contention.
         fn shardIndex(self: *const Self) usize {
@@ -110,7 +116,7 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
         /// Initializes a new `ArcPool`.
         /// Initialize the pool. Chooses shard count and TLS effective capacity
         /// based on CPU count and `T` size. Warms a couple of nodes to smooth bursts.
-        pub fn init(allocator: Allocator) Self {
+        pub fn init(allocator: Allocator, opts: Options) Self {
             // Helper to compute effective TLS capacity (kept here for easy future tuning).
             const computeTlsCapacity = struct {
                 fn run(shards: usize) usize {
@@ -121,8 +127,9 @@ pub fn ArcPool(comptime T: type, comptime EnableStats: bool) type {
                 }
             };
             // Choose active shards: next power-of-two of cpu count, clamped [8, MAX_SHARDS]
-            const cpu_raw = std.Thread.getCpuCount() catch 4;
-            const cpu = if (cpu_raw == 0) 4 else cpu_raw;
+            const cpu_raw = std.Thread.getCpuCount() catch 0;
+            const detected = if (cpu_raw == 0) 16 else cpu_raw;
+            const cpu = if (opts.logical_cpus) |n| n else detected;
             const min_shards: usize = 8;
             var target: usize = if (cpu < min_shards) min_shards else cpu;
             if (target > MAX_SHARDS) target = MAX_SHARDS;
@@ -513,6 +520,10 @@ pub fn ArcPoolWithCapacity(comptime T: type, comptime EnableStats: bool, comptim
         const FlushBuf = struct { buf: [MAX_FLUSH]?*InnerType = [_]?*InnerType{null} ** MAX_FLUSH, count: usize = 0 };
         threadlocal var tls_flush: FlushBuf = .{};
 
+        pub const Options = struct {
+            logical_cpus: ?usize = null,
+        };
+
         fn shardIndex(self: *const Self) usize { return (@intFromPtr(self) ^ @intFromPtr(&tls_cache)) & (self.active_shards - 1); }
         fn pushChain(self: *Self, shard: usize, head_node: *InnerType, tail_node: *InnerType) void {
             var head = self.freelists[shard].load(.monotonic);
@@ -523,10 +534,11 @@ pub fn ArcPoolWithCapacity(comptime T: type, comptime EnableStats: bool, comptim
             }
         }
 
-        pub fn init(allocator: Allocator) Self {
+        pub fn init(allocator: Allocator, opts: Options) Self {
             // Choose active shards from CPU count (next pow2, clamp [8, MAX_SHARDS])
-            const cpu_raw = std.Thread.getCpuCount() catch 4;
-            const cpu = if (cpu_raw == 0) 4 else cpu_raw;
+            const cpu_raw = std.Thread.getCpuCount() catch 0;
+            const detected = if (cpu_raw == 0) 16 else cpu_raw;
+            const cpu = if (opts.logical_cpus) |n| n else detected;
             const min_shards: usize = 8;
             var target: usize = if (cpu < min_shards) min_shards else cpu;
             if (target > MAX_SHARDS) target = MAX_SHARDS;

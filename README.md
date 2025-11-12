@@ -6,38 +6,38 @@
 
 This repository hosts multiple Zig libraries under one roof. Each library can be used on its own or together via a common wrapper. The workspace is designed to be practical: every library ships with small samples, focused tests, and repeatable benchmarks.
 
-Dependency graph/flow: [utils/docs/dependency_graph.md](utils/docs/dependency_graph.md)
+Dependency graph/flow: [docs/utils/dependency_graph.md](docs/utils/dependency_graph.md)
 
 #### Arc
 - Atomic smart pointer with Small Value Optimization (SVO) and weak references
-- Import: `zig_beam_utils.arc`
+- Import: `@import("zig_beam").Utils.Arc`
 - Samples: `zig build samples-arc`
 - Source: [utils/src/arc/arc.zig](utils/src/arc/arc.zig)
 - Unit tests: [utils/src/arc/_arc_unit_tests.zig](utils/src/arc/_arc_unit_tests.zig)
 - Integration tests: [utils/src/arc/_arc_integration_tests.zig](utils/src/arc/_arc_integration_tests.zig)
-- Bench: `zig build bench-arc` [utils/docs/arc_benchmark_results.md](utils/docs/arc_benchmark_results.md)
+- Bench: `zig build bench-arc` [docs/utils/arc_benchmark_results.md](docs/utils/arc_benchmark_results.md)
 
 #### Arc Pool
 - Reuse `Arc(T).Inner` allocations; fronted by a ThreadLocalCache and a global Treiber stack
-- Import: `zig_beam_utils.arc_pool`
+- Import: `@import("zig_beam").Utils.ArcPool`
 - Samples: (covered in Arc samples)
 - Source: [utils/src/arc/arc-pool/arc_pool.zig](utils/src/arc/arc-pool/arc_pool.zig)
 - Unit tests: [utils/src/arc/arc-pool/_arc_pool_unit_tests.zig](utils/src/arc/arc-pool/_arc_pool_unit_tests.zig)
 - Integration tests: [utils/src/arc/arc-pool/_arc_pool_integration_tests.zig](utils/src/arc/arc-pool/_arc_pool_integration_tests.zig)
-- Bench: `zig build bench-arc` [utils/docs/arc_benchmark_results.md](utils/docs/arc_benchmark_results.md)
+- Bench: `zig build bench-arc` [docs/utils/arc_benchmark_results.md](docs/utils/arc_benchmark_results.md)
 
 #### Thread‑Local Cache
 - Per‑thread, lock‑free L1 pool to reduce allocator pressure and contention
-- Import: `zig_beam_utils.thread_local_cache`
+- Import: `@import("zig_beam").Utils.ThreadLocalCache`
 - Samples: `zig build samples-tlc`
 - Source: [utils/src/thread-local-cache/thread_local_cache.zig](utils/src/thread-local-cache/thread_local_cache.zig)
 - Unit tests: [utils/src/thread-local-cache/_thread_local_cache_unit_tests.zig](utils/src/thread-local-cache/_thread_local_cache_unit_tests.zig)
 - Integration tests: [utils/src/thread-local-cache/_thread_local_cache_integration_test.zig](utils/src/thread-local-cache/_thread_local_cache_integration_test.zig)
-- Bench: `zig build bench-tlc` [utils/docs/thread_local_cache_benchmark_results.md](utils/docs/thread_local_cache_benchmark_results.md)
+- Bench: `zig build bench-tlc` [docs/utils/thread_local_cache_benchmark_results.md](docs/utils/thread_local_cache_benchmark_results.md)
 
 #### Tagged Pointer
 - Pack a small tag into a pointer’s low bits (common for lightweight flags)
-- Import: `zig_beam_utils.tagged_pointer`
+- Import: `@import("zig_beam").Utils.TaggedPointer`
 - Samples: `zig build samples-tagged`
 - Source: [utils/src/tagged-pointer/tagged_pointer.zig](utils/src/tagged-pointer/tagged_pointer.zig)
 - Unit tests: [utils/src/tagged-pointer/_tagged_pointer_unit_tests.zig](utils/src/tagged-pointer/_tagged_pointer_unit_tests.zig)
@@ -46,7 +46,7 @@ Dependency graph/flow: [utils/docs/dependency_graph.md](utils/docs/dependency_gr
 
 #### Cycle Detector
 - Debug utility to find unreachable cycles of Arcs using a user‑provided trace function
-- Import: `zig_beam_utils.arc_cycle_detector`
+- Import: `@import("zig_beam").Utils.ArcCycleDetector`
 - Samples: —
 - Source: [utils/src/arc/cycle-detector/arc_cycle_detector.zig](utils/src/arc/cycle-detector/arc_cycle_detector.zig)
 - Unit tests: [utils/src/arc/cycle-detector/_arc_cycle_detector_unit_tests.zig](utils/src/arc/cycle-detector/_arc_cycle_detector_unit_tests.zig)
@@ -71,11 +71,10 @@ Each library folder keeps its own `build.zig`, `src/`, and `docs/` (for reports)
 
 ## Usage
 
-Run from inside a library folder (e.g., `utils/`). The commands below refer to `utils/` as an example.
+Run from repo root. The commands below target the utils library steps exposed at the top level.
 
 ```bash
-cd utils
-zig build test                      # run all tests for this library
+zig build test                      # run all utils tests
 zig build samples-arc               # run ARC samples
 zig build samples-tlc               # run thread-local cache samples
 zig build samples-tagged            # run tagged pointer samples
@@ -101,8 +100,8 @@ $env:ZIG_LOCAL_CACHE_DIR  = "$PWD/.zig-local-cache"
 
 TaggedPointer (encode/decode):
 ```zig
-const utils = @import("zig_beam_utils");
-const TaggedPointer = utils.tagged_pointer.TaggedPointer;
+const beam = @import("zig_beam");
+const TaggedPointer = beam.Utils.TaggedPointer;
 const Ptr = TaggedPointer(*usize, 1);
 var x: usize = 123;
 const bits = (try Ptr.new(&x, 1)).toUnsigned();
@@ -112,8 +111,8 @@ const decoded = Ptr.fromUnsigned(bits);
 
 Thread‑Local Cache (push/pop/clear):
 ```zig
-const utils = @import("zig_beam_utils");
-const Cache = utils.thread_local_cache.ThreadLocalCache(*usize, null);
+const beam = @import("zig_beam");
+const Cache = beam.Utils.ThreadLocalCache(*usize, null);
 var cache: Cache = .{};
 var v: usize = 1;
 _ = cache.push(&v);
@@ -123,8 +122,8 @@ cache.clear(null);
 
 Arc (init/clone/release):
 ```zig
-const utils = @import("zig_beam_utils");
-const Arc = utils.arc.Arc(u64);
+const beam = @import("zig_beam");
+const Arc = beam.Utils.Arc(u64);
 var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
 const alloc = gpa.allocator();
 var a = try Arc.init(alloc, 42); defer a.release();
@@ -134,7 +133,7 @@ var b = a.clone(); defer b.release();
 
 ## Use These Libraries In Your Project
 
-You can consume libraries from this repo via Zig’s package system (recommended) or by vendoring the code. Below shows the package approach with the `utils` library and its wrapper module `zig_beam_utils`.
+You can consume libraries from this repo via Zig’s package system (recommended) or by vendoring the code. Below shows the package approach with the `zig_beam` wrapper module (which exposes the utils library under `Utils`).
 
 1) Add the dependency to your `build.zig.zon`
 
@@ -144,7 +143,7 @@ You can consume libraries from this repo via Zig’s package system (recommended
     .name = "your-app",
     .version = "0.1.0",
     .dependencies = .{
-        .zig_beam_utils = .{
+        .zig_beam = .{
             // Track a tag or commit tarball (recommended)
             .url = "https://github.com/eakova/zig-beam/archive/refs/heads/main.tar.gz",
             // Compute and fill the content hash:
@@ -166,18 +165,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Declare a dependency on the zig-beam utils package
-    const beam_dep = b.dependency("zig_beam_utils", .{ .target = target, .optimize = optimize });
-    const beam_utils = beam_dep.module("zig_beam_utils");
+    // Declare a dependency on zig-beam package
+    const beam_dep = b.dependency("zig_beam", .{ .target = target, .optimize = optimize });
+    const beam = beam_dep.module("zig_beam");
 
-    // Example: an executable that imports zig_beam_utils
+    // Example: an executable that imports zig_beam
     const exe = b.addExecutable(.{
         .name = "your-app",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("zig_beam_utils", beam_utils);
+    exe.root_module.addImport("zig_beam", beam);
     b.installArtifact(exe);
 }
 ```
@@ -187,18 +186,18 @@ pub fn build(b: *std.Build) void {
 ```zig
 // src/main.zig
 const std = @import("std");
-const utils = @import("zig_beam_utils");
+const beam = @import("zig_beam");
 
 pub fn main() !void {
     // Tagged pointer
-    const TaggedPointer = utils.tagged_pointer.TaggedPointer;
+    const TaggedPointer = beam.Utils.TaggedPointer;
 
     // Thread-local cache
-    const ThreadLocalCache = utils.thread_local_cache.ThreadLocalCache;
+    const ThreadLocalCache = beam.Utils.ThreadLocalCache;
 
     // ARC core and pool
-    const Arc = utils.arc.Arc;
-    const ArcPool = utils.arc_pool.ArcPool;
+    const Arc = beam.Utils.Arc;
+    const ArcPool = beam.Utils.ArcPool;
 
     // minimal smoke check
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
@@ -210,7 +209,10 @@ pub fn main() !void {
 ```
 
 ## Notes
-- The `zig_beam_utils` wrapper re-exports all public modules so a single import covers Tagged Pointer, Thread-Local Cache, Arc,Arc Pool, and Cycle Detector.
+- The `zig_beam` wrapper re-exports the utils library under `Utils` so a single import covers Tagged Pointer, Thread-Local Cache, Arc, Arc Pool, and Cycle Detector.
+- Reports are under `docs/utils/*.md`:
+  - Arc: docs/utils/arc_benchmark_results.md
+  - Thread-Local Cache: docs/utils/thread_local_cache_benchmark_results.md
 - If you prefer, you can depend on sub-libraries when they become separate packages; the wrapper is a convenient default today.
 
 ## Library: utils
@@ -226,14 +228,14 @@ The `utils` library groups several building blocks used together or separately.
   - What: fixed-size, per-thread cache that frontloads a global pool
   - Files: `utils/src/thread-local-cache/thread_local_cache.zig`
   - Run: `zig build test-tlc`, `zig build samples-tlc`, `zig build bench-tlc`
-  - Report: `utils/docs/thread_local_cache_benchmark_results.md`
+  - Report: `docs/utils/thread_local_cache_benchmark_results.md`
 
 - ARC (Atomic Reference Counted)
   - What: thread-safe smart pointers with SVO for small types, weak refs, and a pool
   - Files: `utils/src/arc/arc.zig`, `utils/src/arc/arc-pool/arc_pool.zig`, `utils/src/arc/cycle-detector/arc_cycle_detector.zig`
   - Run: `zig build test-arc`, `zig build test-arc-pool`, `zig build test-arc-cycle`, `zig build samples-arc`, `zig build bench-arc`
   - MT run: `ARC_BENCH_RUN_MT=1 zig build bench-arc`
-  - Report: `utils/docs/arc_benchmark_results.md`
+  - Report: `docs/utils/arc_benchmark_results.md`
 
 See `utils/README.md` for module-level details and commands.
 
