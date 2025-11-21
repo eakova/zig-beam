@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
     // don't need and to put everything under a single module.
     // Resolve zig-beam wrapper module from dependency
     const beam_dep = b.dependency("zigbeam", .{ .target = target, .optimize = optimize });
-    const beam_mod = beam_dep.module("zig_beam");
+    const beam_mod = beam_dep.module("zigbeam");
 
     const exe = b.addExecutable(.{
         .name = "usage_sample",
@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
                 // importing modules from different packages).
                 .{ .name = "usage_sample", .module = mod },
                 // Expose zig-beam wrapper to this executable
-                .{ .name = "zig_beam", .module = beam_mod },
+                .{ .name = "zigbeam", .module = beam_mod },
             },
         }),
     });
