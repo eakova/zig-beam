@@ -50,25 +50,24 @@ test "Deque: concurrent push and steal" {
 
     // Counter for stolen items
     var stolen = Atomic(usize).init(0);
+    var done = Atomic(bool).init(false);
 
     // Spawn thieves
     var thieves: [num_thieves]Thread = undefined;
     for (&thieves) |*thief| {
         thief.* = try Thread.spawn(.{}, struct {
-            fn run(stealer: *Deque(usize).Stealer, counter: *Atomic(usize)) void {
+            fn run(stealer: *Deque(usize).Stealer, counter: *Atomic(usize), done_flag: *Atomic(bool)) void {
                 var count: usize = 0;
-                while (true) {
+                while (!done_flag.load(.acquire) or !stealer.isEmpty()) {
                     if (stealer.steal()) |_| {
                         count += 1;
                     } else {
-                        // Empty, but might get more items
                         Thread.yield() catch {};
-                        if (stealer.isEmpty()) break;
                     }
                 }
                 _ = counter.fetchAdd(count, .monotonic);
             }
-        }.run, .{ &result.stealer, &stolen });
+        }.run, .{ &result.stealer, &stolen, &done });
     }
 
     // Owner pushes items
@@ -86,6 +85,9 @@ test "Deque: concurrent push and steal" {
             break; // Success
         }
     }
+
+    // Signal thieves that pushing is done
+    done.store(true, .release);
 
     // Wait for thieves to finish
     for (thieves) |thief| {
@@ -119,26 +121,26 @@ test "Deque: multi-threaded stress test (1M items)" {
     }
 
     var stolen = Atomic(usize).init(0);
+    var done = Atomic(bool).init(false);
 
     // Spawn thieves
     var thieves: [num_thieves]Thread = undefined;
     for (&thieves) |*thief| {
         thief.* = try Thread.spawn(.{}, struct {
-            fn run(stealer: *Deque(u64).Stealer, counter: *Atomic(usize), items: []Atomic(bool)) void {
+            fn run(stealer: *Deque(u64).Stealer, counter: *Atomic(usize), items: []Atomic(bool), done_flag: *Atomic(bool)) void {
                 var count: usize = 0;
-                while (true) {
+                while (!done_flag.load(.acquire) or !stealer.isEmpty()) {
                     if (stealer.steal()) |value| {
                         count += 1;
                         // Mark as consumed
                         _ = items[@intCast(value)].swap(true, .monotonic);
                     } else {
                         Thread.yield() catch {};
-                        if (stealer.isEmpty()) break;
                     }
                 }
                 _ = counter.fetchAdd(count, .monotonic);
             }
-        }.run, .{ &result.stealer, &stolen, consumed_items });
+        }.run, .{ &result.stealer, &stolen, consumed_items, &done });
     }
 
     // Owner pushes all items
@@ -156,6 +158,9 @@ test "Deque: multi-threaded stress test (1M items)" {
             break; // Success
         }
     }
+
+    // Signal thieves that pushing is done
+    done.store(true, .release);
 
     // Wait for thieves
     for (thieves) |thief| {
