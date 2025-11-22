@@ -635,8 +635,10 @@ pub fn Arc(comptime T: type) type {
         /// ```
         pub fn ptrEqual(a: Self, b: Self) bool {
             if (comptime use_svo) {
-                // SVO arcs are always distinct
-                return false;
+                // For SVO types, compare the actual inline data values
+                const a_ptr: *const usize = @ptrCast(&a.storage);
+                const b_ptr: *const usize = @ptrCast(&b.storage);
+                return a_ptr.* == b_ptr.*;
             }
             return a.storage.ptr_with_tag == b.storage.ptr_with_tag;
         }
