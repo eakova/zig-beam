@@ -1,8 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const Thread = std.Thread;
 const DVyukovMPMCQueue = @import("beam-dvyukov-mpmc").DVyukovMPMCQueue;
+
+/// Cross-platform allocator: use c_allocator for performance when libc is linked,
+/// otherwise fall back to page_allocator for Windows/freestanding targets.
+const default_allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 pub const CACHE_LINE: usize = std.atomic.cache_line;
 
@@ -261,7 +269,7 @@ var global_reclaimer_thread: ?Thread = null;
 threadlocal var g_participant: ?*Participant = null;
 
 fn initGlobalEpoch() void {
-    const g = GlobalEpoch.init(.{ .allocator = std.heap.c_allocator }) catch @panic("EBR: failed to init GlobalEpoch");
+    const g = GlobalEpoch.init(.{ .allocator = default_allocator }) catch @panic("EBR: failed to init GlobalEpoch");
     global_epoch_storage = g;
 
     const global_ptr = &global_epoch_storage.?;

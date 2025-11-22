@@ -1,7 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ebr = @import("beam-ebr");
 
 const Atomic = std.atomic.Value;
+
+/// Cross-platform allocator for tests
+const default_allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 inline fn generateSeed(offset: u64) u64 {
     const timestamp = std.time.nanoTimestamp();
@@ -23,7 +30,7 @@ test "EBR fuzz - random pin/retire with yields" {
             var prng = std.Random.DefaultPrng.init(args.seed);
             const random = prng.random();
 
-            var participant = ebr.Participant.init(std.heap.c_allocator);
+            var participant = ebr.Participant.init(default_allocator);
             try args.global_epoch.registerParticipant(&participant);
 
             const MagicNode = struct {
@@ -39,7 +46,7 @@ test "EBR fuzz - random pin/retire with yields" {
                 var guard = ebr.pinFor(&participant, args.global_epoch);
 
                 if (random.boolean()) {
-                    const node_alloc = std.heap.c_allocator;
+                    const node_alloc = default_allocator;
                     const node = try node_alloc.create(MagicNode);
                     node.* = .{
                         .magic = MAGIC,
