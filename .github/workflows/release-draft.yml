@@ -41,7 +41,8 @@ jobs:
         run: |
           DATE="$(date -u +%Y-%m-%d)"
           OUT="$RUNNER_TEMP/release_body.md"
-          cat > "$OUT" << 'EOF'
+          # Expand TAG/DATE into the body while keeping code blocks literal.
+          cat > "$OUT" << EOF
           # Zig‑Beam ${TAG}
 
           Date: ${DATE}
