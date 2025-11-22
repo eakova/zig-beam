@@ -53,8 +53,9 @@ test "Auto(T) allocates padding only when needed" {
 
     try std.testing.expectEqual(@as(u32, 42), v.value);
 
-    // We can't assert exact pad length (depends on runtime detection),
-    // but we can assert that total size is at least cache_line.
+    // Auto(T) allocates padding separately (as a slice), so the struct size
+    // itself won't include padding. We verify that value + padding >= cache_line.
     const line = std.atomic.cache_line;
-    try std.testing.expect(@sizeOf(AutoU32) >= line);
+    const total_size = @sizeOf(u32) + v.pad.len;
+    try std.testing.expect(total_size >= line);
 }
