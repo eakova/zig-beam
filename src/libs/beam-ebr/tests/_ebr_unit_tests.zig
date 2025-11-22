@@ -1,6 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ebr = @import("beam-ebr");
 const Atomic = std.atomic.Value;
+
+/// Cross-platform allocator for tests
+const default_allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
 
 test "EBR register/unregister basic" {
     const allocator = std.testing.allocator;
@@ -76,7 +83,7 @@ test "EBR basic defer/collect sequence" {
 }
 
 test "EBR thread termination orphan garbage" {
-    const allocator = std.heap.c_allocator;
+    const allocator = default_allocator;
 
     var global_epoch = try ebr.GlobalEpoch.init(.{ .allocator = allocator });
     defer global_epoch.deinit();
@@ -99,7 +106,7 @@ test "EBR thread termination orphan garbage" {
 
     const worker = struct {
         fn run(args: *ThreadArgs) !void {
-            const allocator_local = std.heap.c_allocator;
+            const allocator_local = default_allocator;
             const p_ptr = try allocator_local.create(ebr.Participant);
             p_ptr.* = ebr.Participant.init(allocator_local);
 
