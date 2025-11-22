@@ -41,8 +41,8 @@ jobs:
         run: |
           DATE="$(date -u +%Y-%m-%d)"
           OUT="$RUNNER_TEMP/release_body.md"
-          # Expand TAG/DATE into the body while keeping code blocks literal.
-          cat > "$OUT" << EOF
+          # Write template literally, then substitute TAG/DATE.
+          cat > "$OUT" << 'EOF'
           # Zig‑Beam ${TAG}
 
           Date: ${DATE}
@@ -66,6 +66,7 @@ jobs:
           const beam = @import("zigbeam");
           ```
           EOF
+          perl -0pi -e 's/\$\{TAG\}/$ENV{TAG}/g; s/\$\{DATE\}/$ENV{DATE}/g' "$OUT"
           echo "path=$OUT" >> $GITHUB_OUTPUT
 
       - name: Create draft release
