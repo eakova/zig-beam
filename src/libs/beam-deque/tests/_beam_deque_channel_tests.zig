@@ -258,9 +258,17 @@ test "DequeChannel: 1P/8C load balancing test" {
                     }
                 }
 
-                // Final drain
-                while (worker.recv()) |_| {
-                    count += 1;
+                // Final drain - keep trying with work-stealing until no items
+                // found after multiple attempts
+                var empty_attempts: usize = 0;
+                while (empty_attempts < 100) {
+                    if (worker.recv()) |_| {
+                        count += 1;
+                        empty_attempts = 0;
+                    } else {
+                        empty_attempts += 1;
+                        Thread.yield() catch {};
+                    }
                 }
 
                 counter.store(count, .monotonic);
