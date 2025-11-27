@@ -3,7 +3,6 @@ const SegmentedQueueMod = @import("beam-segmented-queue");
 const ebr = @import("beam-ebr");
 
 pub fn main() !void {
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         const leaked = gpa.deinit();
@@ -11,9 +10,13 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
+    // Initialize EBR collector
+    var collector = try ebr.Collector.init(allocator);
+    defer collector.deinit();
+
     const Queue = SegmentedQueueMod.SegmentedQueue(u64, 64);
 
-    var queue = try Queue.init(allocator);
+    var queue = try Queue.init(allocator, &collector);
     defer queue.deinit();
 
     const producer_count: usize = 2;
@@ -29,6 +32,7 @@ pub fn main() !void {
 
     const ThreadArgs = struct {
         queue: *Queue,
+        collector: *ebr.Collector,
         index: usize,
         items_per_producer: usize,
         consumed: *AtomicUsize,
@@ -39,16 +43,20 @@ pub fn main() !void {
     };
 
     const Producer = struct {
-        fn run(args: *ThreadArgs) !void {
-            const participant = try args.queue.createParticipant();
-            defer args.queue.destroyParticipant(participant);
+        fn run(args: *ThreadArgs) void {
+            // Register thread with EBR collector
+            const handle = args.collector.registerThread() catch {
+                std.debug.print("Producer {d} failed to register thread\n", .{args.index});
+                return;
+            };
+            defer args.collector.unregisterThread(handle);
 
             const start = args.index * args.items_per_producer;
             const end = start + args.items_per_producer;
 
             var i: usize = start;
             while (i < end) : (i += 1) {
-                args.queue.enqueue(@intCast(i)) catch {
+                args.queue.enqueueWithAutoGuard(@intCast(i)) catch {
                     _ = args.enqueue_errors.fetchAdd(1, .monotonic);
                     std.debug.print("Producer {d} error at item {d}\n", .{ args.index, i });
                     break;
@@ -65,9 +73,13 @@ pub fn main() !void {
     };
 
     const Consumer = struct {
-        fn run(args: *ThreadArgs) !void {
-            const participant = try args.queue.createParticipant();
-            defer args.queue.destroyParticipant(participant);
+        fn run(args: *ThreadArgs) void {
+            // Register thread with EBR collector
+            const handle = args.collector.registerThread() catch {
+                std.debug.print("Consumer {d} failed to register thread\n", .{args.index});
+                return;
+            };
+            defer args.collector.unregisterThread(handle);
 
             var local_consumed: usize = 0;
             var empty_streak: usize = 0;
@@ -78,11 +90,8 @@ pub fn main() !void {
                     return;
                 }
 
-                // Pin/unpin guard per operation to allow epoch advancement
-                var guard = ebr.pin();
-                defer guard.deinit();
-
-                if (args.queue.dequeue(&guard)) |_| {
+                // Use auto-guard version for simpler code
+                if (args.queue.dequeueWithAutoGuard()) |_| {
                     _ = args.consumed.fetchAdd(1, .monotonic);
                     local_consumed += 1;
                     empty_streak = 0;
@@ -123,6 +132,7 @@ pub fn main() !void {
     while (p_idx < producer_count) : (p_idx += 1) {
         producer_args[p_idx] = .{
             .queue = &queue,
+            .collector = &collector,
             .index = p_idx,
             .items_per_producer = items_per_producer,
             .consumed = &consumed,
@@ -138,6 +148,7 @@ pub fn main() !void {
     while (c_idx < consumer_count) : (c_idx += 1) {
         consumer_args[c_idx] = .{
             .queue = &queue,
+            .collector = &collector,
             .index = c_idx,
             .items_per_producer = items_per_producer,
             .consumed = &consumed,

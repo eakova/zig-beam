@@ -16,7 +16,7 @@ Work-stealing is a fundamental pattern in parallel computing where busy threads 
          │ push()                             │ steal()
          ▼                                    ▼
     ┌────────────────────────────────────────────┐
-    │     [5]  [4]  [3]  [2]  [1]  [ ]  [ ]     │  Ring Buffer
+    │     [5]  [4]  [3]  [2]  [1]  [ ]  [ ]      │  Ring Buffer
     └────────────────────────────────────────────┘
          ▲                          ▲
          │                          │
@@ -164,7 +164,7 @@ Worker 0          Worker 1          Worker 2          Worker N
   ▼                 ▼                 ▼                 ▼
 ┌──────┐        ┌──────┐        ┌──────┐        ┌──────┐
 │Deque │        │Deque │        │Deque │   ...  │Deque │  Local
-│ [5] │        │ [3] │        │ [8] │        │ [2] │  Deques
+│ [5]  │        │ [3]  │        │ [8]  │        │ [2]  │  Deques
 └──────┘        └──────┘        └──────┘        └──────┘  (Fast Path)
   │  ▲            │  ▲            │  ▲            │  ▲
   │  └────────────┼──┼────────────┼──┘  Steal     │  │

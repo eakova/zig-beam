@@ -10,18 +10,23 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
+    // Initialize EBR collector
+    var collector = try ebr.Collector.init(allocator);
+    defer collector.deinit();
+
+    // Register main thread with collector
+    const main_handle = try collector.registerThread();
+    defer collector.unregisterThread(main_handle);
+
     const Queue = SegmentedQueueMod.SegmentedQueue(u64, 64);
 
     std.debug.print("\n=== SegmentedQueue API Comparison Benchmark ===\n", .{});
     std.debug.print("Comparing TLS-based API vs Batching API\n\n", .{});
 
-    // Test 1: Simple API (TLS guard per operation - formerly "WithAutoGuard")
+    // Test 1: Simple API (TLS guard per operation - "WithAutoGuard")
     {
-        var queue = try Queue.init(allocator);
+        var queue = try Queue.init(allocator, &collector);
         defer queue.deinit();
-
-        const participant = try queue.createParticipant();
-        defer queue.destroyParticipant(participant);
 
         const iterations: usize = 100_000;
         const start = std.time.nanoTimestamp();
@@ -51,25 +56,24 @@ pub fn main() !void {
 
     // Test 2: Primary API (explicit guard management per operation)
     {
-        var queue = try Queue.init(allocator);
+        var queue = try Queue.init(allocator, &collector);
         defer queue.deinit();
-
-        const participant = try queue.createParticipant();
-        defer queue.destroyParticipant(participant);
 
         const iterations: usize = 100_000;
         const start = std.time.nanoTimestamp();
 
         var i: usize = 0;
         while (i < iterations) : (i += 1) {
+            const guard = collector.pin();
+            defer guard.unpin();
             try queue.enqueue(i);
         }
 
         i = 0;
         while (i < iterations) : (i += 1) {
-            var guard = ebr.pin();
-            defer guard.deinit();
-            _ = queue.dequeue(&guard);
+            const guard = collector.pin();
+            defer guard.unpin();
+            _ = queue.dequeue();
         }
 
         const end = std.time.nanoTimestamp();
@@ -78,7 +82,7 @@ pub fn main() !void {
         const ops = iterations * 2; // enqueue + dequeue
         const throughput = @as(f64, @floatFromInt(ops)) / elapsed_s;
 
-        std.debug.print("Primary API (explicit guard per dequeue):\n", .{});
+        std.debug.print("Primary API (explicit guard per operation):\n", .{});
         std.debug.print("  iterations:  {d}\n", .{iterations});
         std.debug.print("  total_ops:   {d}\n", .{ops});
         std.debug.print("  elapsed_sec: {d:.6}\n", .{elapsed_s});
@@ -90,11 +94,8 @@ pub fn main() !void {
     const batch_sizes = [_]usize{ 1, 10, 100, 1000, 10000 };
 
     for (batch_sizes) |batch_size| {
-        var queue = try Queue.init(allocator);
+        var queue = try Queue.init(allocator, &collector);
         defer queue.deinit();
-
-        const participant = try queue.createParticipant();
-        defer queue.destroyParticipant(participant);
 
         const total_items: usize = 100_000;
         const num_batches = total_items / batch_size;

@@ -1,38 +1,40 @@
-# Beam-Ebr (epoch)
+# EBR (Epoch-Based Reclamation)
 
-Epoch-based garbage collection for building lock-free concurrent data structures in Zig.
+High-performance, lock-free memory reclamation for building concurrent data structures in Zig.
 
 ## Overview
 
-When building concurrent data structures, a fundamental problem arises: when a thread removes an object from a shared data structure, other threads may still have pointers to it. Beam-Ebr enables those threads to safely defer destruction until all pointers to that object have been dropped.
+Epoch-Based Reclamation (EBR) solves the fundamental problem in lock-free programming: safely reclaiming memory that might still be accessed by concurrent readers. EBR provides a simple, efficient solution with minimal overhead.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Beam-Ebr Flow                              │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                     EBR Architecture                       │
+└────────────────────────────────────────────────────────────┘
 
-    GlobalEpoch (singleton)
-         │
-         │ registerParticipant()
-         ▼
-    Participant (per-thread)
-         │
-         ├─────► setThreadParticipant() ──► TLS binding
-         │
-         │ pin() / pinFor()
-         ▼
-       Guard ────────────────┐
-         │                   │
-         │                   │ deferDestroy()
-         ▼                   ▼
-    Lock-free ops      Deferred memory
-         │                   │
-         │ deinit()          │
-         ▼                   │
-    Release guard ◄──────────┘
-         │
-         ▼
-    Epoch advances ──► Safe reclamation
+                    Global Epoch: 2
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+        ▼                 ▼                 ▼
+   ┌─────────┐       ┌─────────┐       ┌─────────┐
+   │Thread 1 │       │Thread 2 │       │Thread 3 │
+   │ epoch=2 │       │ epoch=2 │       │  idle   │
+   │ PINNED  │       │ PINNED  │       │         │
+   └────┬────┘       └────┬────┘       └────┬────┘
+        │                 │                 │
+        ▼                 ▼                 ▼
+   ┌─────────┐       ┌─────────┐       ┌─────────┐
+   │ Garbage │       │ Garbage │       │ Garbage │
+   │  Bag    │       │  Bag    │       │  Bag    │
+   └─────────┘       └─────────┘       └─────────┘
+
+   Safe Epoch: 0  (objects from epoch 0 can be reclaimed)
+
+
+   Thread operations:          Collector operations:
+   ───────────────────         ─────────────────────
+   pin()    ~2-5ns             deferReclaim()  O(1)
+   unpin()  ~2-3ns             collect()       O(n)
 ```
 
 ## Usage
@@ -40,71 +42,177 @@ When building concurrent data structures, a fundamental problem arises: when a t
 ```zig
 const ebr = @import("beam-ebr");
 
-// Each thread registers once
-var participant = ebr.Participant.init(allocator);
-const global = ebr.global();
-try global.registerParticipant(&participant);
-defer global.unregisterParticipant(&participant);
+// Create a collector (one per application)
+var collector = try ebr.Collector.init(allocator);
+defer collector.deinit();
 
-ebr.setThreadParticipant(&participant);
+// Register thread (required before using EBR)
+const handle = try collector.registerThread();
+defer collector.unregisterThread(handle);
 
-// Use guards to protect memory access
-var guard = ebr.pin();
-defer guard.deinit();
+// Enter critical section
+const guard = collector.pin();
+defer guard.unpin();
 
-// Safe to read lock-free data structures while guard is active
-const value = my_lock_free_structure.read(&guard);
-
-// Defer destruction of removed nodes
-guard.deferDestroy(.{
-    .ptr = old_node,
-    .destroy_fn = destroyNode,
-    .epoch = 0,
-});
+// Safe to access shared data here - protected from reclamation
+const data = shared_ptr.load(.acquire);
+// ... use data safely ...
 ```
 
 ## Features
 
 ### Core API
 
-- **`ebr.Participant.init(allocator)`** - Create a participant for thread registration
-- **`ebr.global()`** - Get the global epoch instance
-- **`global.registerParticipant(participant)`** - Register a thread with EBR system
-- **`global.unregisterParticipant(participant)`** - Unregister a thread from EBR system
-- **`ebr.setThreadParticipant(participant)`** - Bind participant to current thread for TLS access
-- **`ebr.pin()`** - Create guard using thread-local participant (requires setThreadParticipant)
-- **`ebr.pinFor(participant, global)`** - Create guard with explicit participant (no TLS required)
-- **`guard.deinit()`** - Release guard and allow epoch advancement
-- **`guard.deferDestroy(garbage)`** - Defer destruction until safe (all guards released)
-- **`participant.deinit(global)`** - Clean up participant resources
+**Collector (Central Coordinator):**
+- **`Collector.init(allocator)`** - Create a collector
+- **`collector.deinit()`** - Destroy collector (all threads must be unregistered)
+- **`collector.registerThread()`** - Register calling thread (~50ns, once per thread)
+- **`collector.unregisterThread(handle)`** - Unregister thread
+- **`collector.pin()`** - Enter critical section (~2-5ns)
+- **`collector.pinFast()`** - Ultra-fast pin, no nesting support (~1-2ns)
+- **`collector.deferReclaim(ptr, dtor)`** - Defer destruction with custom destructor
+- **`collector.deferDestroy(T, ptr)`** - Zero-allocation defer for types with `allocator` field
+- **`collector.collect()`** - Trigger garbage collection
+- **`collector.tryAdvanceEpoch()`** - Try to advance global epoch
 
-### Performance Patterns
+**Guard (Critical Section):**
+- **`guard.unpin()`** - Exit critical section (~2-3ns)
+- **`guard.isValid()`** - Check if guard is valid
 
-- **Single guard for batches** - Amortize guard overhead across multiple operations (~250x faster)
-- **Manual participant management** - Avoid TLS overhead when needed
-- **Custom destroy functions** - Handle complex cleanup logic (trees, graphs, etc.)
+**FastGuard (Maximum Throughput):**
+- **`fast_guard.unpin()`** - Ultra-fast unpin (~1ns, no nesting support)
 
-### Learn More
+### Performance Characteristics
 
-- **[Usage Samples](_ebr_samples.zig)** - 9 progressive examples from quick start to advanced patterns
+- **pin()**: ~2-5ns - single atomic store + threadlocal read
+- **unpin()**: ~2-3ns - single atomic store
+- **pinFast()/unpinFast()**: ~1-2ns - eliminates threadlocal read
+- **deferReclaim()**: O(1) amortized - epoch-bucketed garbage bag
+- **Epoch advancement**: Lock-free CAS, probabilistic sampling reduces contention
+- **Memory overhead**: <32 bytes per deferred object
+
+### Configuration
+
+```zig
+// Default configuration (good for 8-16 threads)
+var collector = try ebr.Collector.init(allocator);
+
+// Custom configuration for high scalability (32+ threads)
+const ScalableCollector = ebr.CollectorType(.{
+    .epoch_advance_sample_rate = 8,  // 12.5% sampling (reduces contention)
+    .batch_threshold = 128,           // larger batches (less frequent collection)
+});
+var collector = try ScalableCollector.init(allocator);
+```
+
+| Config Option | Default | Description |
+|---------------|---------|-------------|
+| `epoch_advance_sample_rate` | 4 | 1 in N collections try epoch advance |
+| `batch_threshold` | 64 | Objects before triggering collection |
+
+### Design Principles
+
+- **Per-Collector epochs** - No global singleton, supports multiple isolated collectors
+- **Combined epoch+active flag** - Single atomic eliminates SeqCst fence
+- **Cache-line alignment** - Prevents false sharing between threads
+- **Epoch-bucketed garbage** - O(1) reclamation of entire epochs
+- **Probabilistic sampling** - Reduces mutex contention at scale
+- **Zero-allocation defer** - `deferDestroy` for types with embedded allocator
+
+### Common Patterns
+
+```zig
+// Pattern 1: Lock-free stack with safe reclamation
+pub const LockFreeStack = struct {
+    head: std.atomic.Value(?*Node),
+    collector: *ebr.Collector,
+    allocator: std.mem.Allocator,
+
+    pub fn pop(self: *LockFreeStack) ?i32 {
+        const guard = self.collector.pin();
+        defer guard.unpin();
+
+        var current = self.head.load(.acquire);
+        while (current) |node| {
+            const next = node.next.load(.acquire);
+            if (self.head.cmpxchgWeak(current, next, .release, .monotonic)) |actual| {
+                current = actual;
+            } else {
+                const value = node.value;
+                // Safe deferred destruction
+                self.collector.deferDestroy(Node, node);
+                return value;
+            }
+        }
+        return null;
+    }
+};
+
+// Pattern 2: Read-heavy concurrent map
+fn lookup(map: *ConcurrentMap, key: u64) ?*Value {
+    const guard = map.collector.pin();
+    defer guard.unpin();
+
+    // Safe to traverse - nodes won't be freed while pinned
+    var node = map.buckets[hash(key) % map.buckets.len].load(.acquire);
+    while (node) |n| {
+        if (n.key == key) return &n.value;
+        node = n.next.load(.acquire);
+    }
+    return null;
+}
+
+// Pattern 3: Batch operations with single guard
+fn processBatch(collector: *ebr.Collector, items: []Item) void {
+    const guard = collector.pin();
+    defer guard.unpin();
+
+    for (items) |item| {
+        // All operations protected by single guard
+        processItem(item);
+    }
+}
+
+// Pattern 4: Custom destructor
+fn customDtor(ptr: *anyopaque) void {
+    const node: *MyNode = @ptrCast(@alignCast(ptr));
+    node.cleanup();  // Custom cleanup logic
+    global_allocator.destroy(node);
+}
+
+collector.deferReclaim(@ptrCast(node), customDtor);
+```
+
+## How EBR Works
+
+1. **Global Epoch**: A monotonically increasing counter shared by all threads
+2. **Pin**: Thread records current epoch, marking itself as "active"
+3. **Unpin**: Thread clears active flag, allowing epoch to advance
+4. **Defer**: Objects are tagged with current epoch and added to garbage bag
+5. **Reclaim**: Objects are freed when ALL threads have advanced past their epoch
+
+**Safety Guarantee**: An object deferred at epoch N is only freed after the global epoch reaches N+2 AND all threads have unpinned from epochs ≤ N.
 
 ## Build Commands
 
 ```bash
-# Run all EBR tests
-zig build test
+# Run EBR unit tests
+zig build test-ebr-unit
 
-# Run EBR samples (quick start to advanced)
-zig build samples-ebr -Doptimize=ReleaseFast
+# Run EBR integration tests
+zig build test-ebr-integration
+
+# Run EBR stress tests
+zig build test-ebr-stress
+
+# Run all EBR tests
+zig build test-ebr
 
 # Run EBR benchmarks
 zig build bench-ebr -Doptimize=ReleaseFast
 
-# Test EBR shutdown mechanism
-zig build test-ebr-shutdown -Doptimize=ReleaseFast
-
-# Measure EBR garbage queue pressure (diagnostic)
-zig build ebr-queue-pressure -Doptimize=ReleaseFast
+# Run EBR samples
+zig build samples-ebr
 ```
 
 ## Requirements
@@ -112,6 +220,7 @@ zig build ebr-queue-pressure -Doptimize=ReleaseFast
 - **Zig version**: 0.13.0 or later
 - **Platform**: Any platform supported by Zig's standard library
 - **Dependencies**: Part of [zig-beam](https://github.com/eakova/zig-beam)
+- **Constraints**: Types using `deferDestroy` must have an `allocator` field
 
 ## License
 

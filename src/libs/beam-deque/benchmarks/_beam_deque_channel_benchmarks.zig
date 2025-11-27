@@ -4,7 +4,12 @@ const Atomic = std.atomic.Value;
 const DequeChannel = @import("beam-deque-channel").DequeChannel;
 
 // =============================================================================
-// DequeChannel Performance Benchmarks
+// DequeChannel Performance Benchmarks (V2 - Correct Usage Pattern)
+// =============================================================================
+//
+// These benchmarks test the INTENDED usage pattern where each worker is BOTH
+// a producer AND a consumer, operating primarily on its own local deque.
+// This matches the design principle: minimize contention, maximize fast path.
 // =============================================================================
 
 fn formatNs(ns: u64) void {
@@ -19,11 +24,17 @@ fn formatNs(ns: u64) void {
     }
 }
 
-fn benchSendRecvSingleThread() !void {
+// =============================================================================
+// Benchmark 1: Single Worker (Producer + Consumer)
+// Tests the ideal case: zero contention, 100% local deque usage
+// =============================================================================
+fn benchSingleWorkerProducerConsumer() !void {
     const allocator = std.heap.c_allocator;
     const Channel = DequeChannel(u64, 256, 4096);
 
-    std.debug.print("\n=== Single-Threaded Send/Recv ===\n", .{});
+    std.debug.print("\n=== Single Worker (Producer + Consumer) ===\n", .{});
+    std.debug.print("Pattern: Worker sends to itself, then recvs from itself\n", .{});
+    std.debug.print("Expected: ~5-15ns per op (100%% local deque fast path)\n\n", .{});
 
     var result = try Channel.init(allocator, 1);
     defer result.channel.deinit(&result.workers);
@@ -59,324 +70,317 @@ fn benchSendRecvSingleThread() !void {
     std.debug.print("\nThroughput:   {d} ops/sec\n", .{ops_per_sec});
 }
 
-fn bench4P4C() !void {
+// =============================================================================
+// Benchmark 2: 4 Workers (Each is Producer + Consumer)
+// Tests realistic multi-threaded usage with minimal contention
+// =============================================================================
+fn bench4WorkersProducerConsumer() !void {
     const allocator = std.heap.c_allocator;
     const Channel = DequeChannel(u64, 256, 4096);
 
-    std.debug.print("\n=== 4 Producers / 4 Consumers ===\n", .{});
+    std.debug.print("\n=== 4 Workers (Each is Producer + Consumer) ===\n", .{});
+    std.debug.print("Pattern: Each worker sends/recvs from its own deque\n", .{});
+    std.debug.print("Expected: Scales linearly (~4x single worker throughput)\n\n", .{});
+
+    var result = try Channel.init(allocator, 4);
+    defer result.channel.deinit(&result.workers);
+
+    const items_per_worker: usize = 250_000;
+    var total_processed = Atomic(usize).init(0);
+
+    // Each worker is both producer and consumer
+    var workers: [4]Thread = undefined;
+    for (&workers, 0..) |*worker, idx| {
+        worker.* = try Thread.spawn(.{}, struct {
+            fn run(
+                w: *Channel.Worker,
+                count: usize,
+                counter: *Atomic(usize),
+            ) void {
+                var processed: usize = 0;
+                var i: usize = 0;
+
+                // Producer-Consumer loop: send and recv in same thread
+                while (i < count) : (i += 1) {
+                    // Send to own local deque (fast path)
+                    while (true) {
+                        w.send(i) catch |err| {
+                            if (err == error.Full) {
+                                Thread.yield() catch {};
+                                continue;
+                            }
+                            std.debug.print("Send error: {}\n", .{err});
+                            return;
+                        };
+                        break;
+                    }
+
+                    // Recv from own local deque (fast path - LIFO)
+                    if (w.recv()) |_| {
+                        processed += 1;
+                    }
+                }
+
+                // Drain any remaining items
+                while (w.recv()) |_| {
+                    processed += 1;
+                }
+
+                _ = counter.fetchAdd(processed, .monotonic);
+            }
+        }.run, .{
+            &result.workers[idx],
+            items_per_worker,
+            &total_processed,
+        });
+    }
+
+    const start = std.time.nanoTimestamp();
+
+    // Wait for all workers
+    for (workers) |worker| {
+        worker.join();
+    }
+
+    const end = std.time.nanoTimestamp();
+
+    const processed = total_processed.load(.monotonic);
+    const elapsed_ns: u64 = @intCast(end - start);
+    const total_ops = items_per_worker * 4 * 2; // 4 workers × items × (send+recv)
+    const ns_per_op = elapsed_ns / total_ops;
+    const ops_per_sec = (total_ops * 1_000_000_000) / elapsed_ns;
+
+    std.debug.print("Expected items:  {d}\n", .{items_per_worker * 4});
+    std.debug.print("Processed:       {d}\n", .{processed});
+    std.debug.print("Total ops:       {d} (send+recv)\n", .{total_ops});
+    std.debug.print("Elapsed:         ", .{});
+    formatNs(elapsed_ns);
+    std.debug.print("\nPer-op:          ", .{});
+    formatNs(ns_per_op);
+    std.debug.print("\nThroughput:      {d} ops/sec\n", .{ops_per_sec});
+}
+
+// =============================================================================
+// Benchmark 3: 8 Workers (Each is Producer + Consumer)
+// Tests scalability with more workers
+// =============================================================================
+fn bench8WorkersProducerConsumer() !void {
+    const allocator = std.heap.c_allocator;
+    const Channel = DequeChannel(u64, 256, 8192);
+
+    std.debug.print("\n=== 8 Workers (Each is Producer + Consumer) ===\n", .{});
+    std.debug.print("Pattern: Each worker sends/recvs from its own deque\n", .{});
+    std.debug.print("Expected: Scales linearly (~8x single worker throughput)\n\n", .{});
 
     var result = try Channel.init(allocator, 8);
     defer result.channel.deinit(&result.workers);
 
-    const items_per_producer: usize = 250_000;
-    const total_items = items_per_producer * 4;
+    const items_per_worker: usize = 125_000;
+    var total_processed = Atomic(usize).init(0);
 
-    var total_consumed = Atomic(usize).init(0);
-    var done = Atomic(bool).init(false);
-
-    // Spawn 4 producer threads (workers 0-3)
-    var producers: [4]Thread = undefined;
-    for (&producers, 0..) |*producer, idx| {
-        producer.* = try Thread.spawn(.{}, struct {
+    // Each worker is both producer and consumer
+    var workers: [8]Thread = undefined;
+    for (&workers, 0..) |*worker, idx| {
+        worker.* = try Thread.spawn(.{}, struct {
             fn run(
-                worker: *Channel.Worker,
-                start: usize,
+                w: *Channel.Worker,
                 count: usize,
+                counter: *Atomic(usize),
             ) void {
+                var processed: usize = 0;
                 var i: usize = 0;
+
+                // Producer-Consumer loop
                 while (i < count) : (i += 1) {
-                    const item = start + i;
+                    // Send to own local deque
                     while (true) {
-                        worker.send(item) catch |err| {
+                        w.send(i) catch |err| {
                             if (err == error.Full) {
                                 Thread.yield() catch {};
                                 continue;
                             }
-                            std.debug.print("Producer error: {}\n", .{err});
+                            std.debug.print("Send error: {}\n", .{err});
                             return;
                         };
                         break;
                     }
-                }
-            }
-        }.run, .{
-            &result.workers[idx],
-            idx * items_per_producer,
-            items_per_producer,
-        });
-    }
 
-    // Spawn 4 consumer threads (workers 4-7)
-    var consumers: [4]Thread = undefined;
-    for (&consumers, 4..) |*consumer, idx| {
-        consumer.* = try Thread.spawn(.{}, struct {
-            fn run(
-                worker: *Channel.Worker,
-                done_flag: *Atomic(bool),
-                counter: *Atomic(usize),
-            ) void {
-                var count: usize = 0;
-
-                while (true) {
-                    if (worker.recv()) |_| {
-                        count += 1;
-                    } else {
-                        if (done_flag.load(.acquire)) break;
-                        Thread.yield() catch {};
+                    // Recv from own local deque (LIFO)
+                    if (w.recv()) |_| {
+                        processed += 1;
                     }
                 }
 
-                _ = counter.fetchAdd(count, .monotonic);
+                // Drain any remaining items
+                while (w.recv()) |_| {
+                    processed += 1;
+                }
+
+                _ = counter.fetchAdd(processed, .monotonic);
             }
         }.run, .{
             &result.workers[idx],
-            &done,
-            &total_consumed,
+            items_per_worker,
+            &total_processed,
         });
     }
 
     const start = std.time.nanoTimestamp();
 
-    // Wait for producers
-    for (producers) |producer| {
-        producer.join();
-    }
-
-    // Signal done
-    done.store(true, .release);
-
-    // Wait for consumers
-    for (consumers) |consumer| {
-        consumer.join();
+    // Wait for all workers
+    for (workers) |worker| {
+        worker.join();
     }
 
     const end = std.time.nanoTimestamp();
 
-    const consumed = total_consumed.load(.monotonic);
+    const processed = total_processed.load(.monotonic);
     const elapsed_ns: u64 = @intCast(end - start);
-    const ns_per_item = elapsed_ns / consumed;
-    const items_per_sec = (consumed * 1_000_000_000) / elapsed_ns;
+    const total_ops = items_per_worker * 8 * 2; // 8 workers × items × (send+recv)
+    const ns_per_op = elapsed_ns / total_ops;
+    const ops_per_sec = (total_ops * 1_000_000_000) / elapsed_ns;
 
-    std.debug.print("Total items:  {d}\n", .{total_items});
-    std.debug.print("Consumed:     {d}\n", .{consumed});
-    std.debug.print("Elapsed:      ", .{});
+    std.debug.print("Expected items:  {d}\n", .{items_per_worker * 8});
+    std.debug.print("Processed:       {d}\n", .{processed});
+    std.debug.print("Total ops:       {d} (send+recv)\n", .{total_ops});
+    std.debug.print("Elapsed:         ", .{});
     formatNs(elapsed_ns);
-    std.debug.print("\nPer-item:     ", .{});
-    formatNs(ns_per_item);
-    std.debug.print("\nThroughput:   {d} items/sec\n", .{items_per_sec});
+    std.debug.print("\nPer-op:          ", .{});
+    formatNs(ns_per_op);
+    std.debug.print("\nThroughput:      {d} ops/sec\n", .{ops_per_sec});
 }
 
-fn bench8P8C() !void {
-    const allocator = std.heap.c_allocator;
-    const Channel = DequeChannel(u64, 256, 8192);
-
-    std.debug.print("\n=== 8 Producers / 8 Consumers ===\n", .{});
-
-    var result = try Channel.init(allocator, 16);
-    defer result.channel.deinit(&result.workers);
-
-    const items_per_producer: usize = 125_000;
-    const total_items = items_per_producer * 8;
-
-    var total_consumed = Atomic(usize).init(0);
-    var done = Atomic(bool).init(false);
-
-    // Spawn 8 producer threads (workers 0-7)
-    var producers: [8]Thread = undefined;
-    for (&producers, 0..) |*producer, idx| {
-        producer.* = try Thread.spawn(.{}, struct {
-            fn run(
-                worker: *Channel.Worker,
-                start: usize,
-                count: usize,
-            ) void {
-                var i: usize = 0;
-                while (i < count) : (i += 1) {
-                    const item = start + i;
-                    while (true) {
-                        worker.send(item) catch |err| {
-                            if (err == error.Full) {
-                                Thread.yield() catch {};
-                                continue;
-                            }
-                            std.debug.print("Producer error: {}\n", .{err});
-                            return;
-                        };
-                        break;
-                    }
-                }
-            }
-        }.run, .{
-            &result.workers[idx],
-            idx * items_per_producer,
-            items_per_producer,
-        });
-    }
-
-    // Spawn 8 consumer threads (workers 8-15)
-    var consumers: [8]Thread = undefined;
-    for (&consumers, 8..) |*consumer, idx| {
-        consumer.* = try Thread.spawn(.{}, struct {
-            fn run(
-                worker: *Channel.Worker,
-                done_flag: *Atomic(bool),
-                counter: *Atomic(usize),
-            ) void {
-                var count: usize = 0;
-
-                while (true) {
-                    if (worker.recv()) |_| {
-                        count += 1;
-                    } else {
-                        if (done_flag.load(.acquire)) break;
-                        Thread.yield() catch {};
-                    }
-                }
-
-                _ = counter.fetchAdd(count, .monotonic);
-            }
-        }.run, .{
-            &result.workers[idx],
-            &done,
-            &total_consumed,
-        });
-    }
-
-    const start = std.time.nanoTimestamp();
-
-    // Wait for producers
-    for (producers) |producer| {
-        producer.join();
-    }
-
-    // Signal done
-    done.store(true, .release);
-
-    // Wait for consumers
-    for (consumers) |consumer| {
-        consumer.join();
-    }
-
-    const end = std.time.nanoTimestamp();
-
-    const consumed = total_consumed.load(.monotonic);
-    const elapsed_ns: u64 = @intCast(end - start);
-    const ns_per_item = elapsed_ns / consumed;
-    const items_per_sec = (consumed * 1_000_000_000) / elapsed_ns;
-
-    std.debug.print("Total items:  {d}\n", .{total_items});
-    std.debug.print("Consumed:     {d}\n", .{consumed});
-    std.debug.print("Elapsed:      ", .{});
-    formatNs(elapsed_ns);
-    std.debug.print("\nPer-item:     ", .{});
-    formatNs(ns_per_item);
-    std.debug.print("\nThroughput:   {d} items/sec\n", .{items_per_sec});
-}
-
-fn bench1P8CLoadBalancing() !void {
+// =============================================================================
+// Benchmark 4: Work-Stealing Test (Imbalanced Load)
+// Tests work-stealing when some workers are busier than others
+// =============================================================================
+fn benchWorkStealingImbalanced() !void {
     const allocator = std.heap.c_allocator;
     const Channel = DequeChannel(u64, 128, 2048);
 
-    std.debug.print("\n=== 1 Producer / 8 Consumers (Load Balancing) ===\n", .{});
+    std.debug.print("\n=== Work-Stealing Test (Imbalanced Load) ===\n", .{});
+    std.debug.print("Pattern: Worker 0 produces 80%%, workers 1-7 produce 20%%\n", .{});
+    std.debug.print("All workers consume equally - tests work-stealing\n\n", .{});
 
-    var result = try Channel.init(allocator, 9); // 9 workers: 1 producer + 8 consumers
+    var result = try Channel.init(allocator, 8);
     defer result.channel.deinit(&result.workers);
 
-    const total_items: usize = 500_000;
+    const total_items: usize = 400_000;
+    const worker0_items: usize = (total_items * 80) / 100; // 320,000
+    const other_worker_items: usize = (total_items * 20) / (100 * 7); // ~11,429 each
 
+    var production_done = Atomic(bool).init(false);
     var consumed_counts: [8]Atomic(usize) = undefined;
     for (&consumed_counts) |*count| {
         count.* = Atomic(usize).init(0);
     }
 
-    var done = Atomic(bool).init(false);
+    // Spawn 8 workers, each is both producer and consumer
+    var workers: [8]Thread = undefined;
+    for (&workers, 0..) |*worker, idx| {
+        const items_to_produce = if (idx == 0) worker0_items else other_worker_items;
 
-    // Spawn 8 consumer threads (workers 0-7)
-    var consumers: [8]Thread = undefined;
-    for (&consumers, 0..) |*consumer, idx| {
-        consumer.* = try Thread.spawn(.{}, struct {
+        worker.* = try Thread.spawn(.{}, struct {
             fn run(
-                worker: *Channel.Worker,
+                w: *Channel.Worker,
+                produce_count: usize,
                 done_flag: *Atomic(bool),
                 counter: *Atomic(usize),
             ) void {
-                var count: usize = 0;
+                var consumed: usize = 0;
 
+                // Phase 1: Produce items to own local deque
+                var i: usize = 0;
+                while (i < produce_count) : (i += 1) {
+                    while (true) {
+                        w.send(i) catch |err| {
+                            if (err == error.Full) {
+                                // While waiting, try to consume
+                                if (w.recv()) |_| {
+                                    consumed += 1;
+                                }
+                                Thread.yield() catch {};
+                                continue;
+                            }
+                            std.debug.print("Send error: {}\n", .{err});
+                            return;
+                        };
+                        break;
+                    }
+
+                    // Try to consume every few items
+                    if (i % 10 == 0) {
+                        if (w.recv()) |_| {
+                            consumed += 1;
+                        }
+                    }
+                }
+
+                // Phase 2: Consume until all work is done
                 while (!done_flag.load(.acquire)) {
-                    if (worker.recv()) |_| {
-                        count += 1;
+                    if (w.recv()) |_| {
+                        consumed += 1;
                     } else {
                         Thread.yield() catch {};
                     }
                 }
 
                 // Final drain
-                while (worker.recv()) |_| {
-                    count += 1;
+                while (w.recv()) |_| {
+                    consumed += 1;
                 }
 
-                counter.store(count, .monotonic);
+                counter.store(consumed, .monotonic);
             }
         }.run, .{
             &result.workers[idx],
-            &done,
+            items_to_produce,
+            &production_done,
             &consumed_counts[idx],
         });
     }
 
-    // Single producer (worker 8 - dedicated producer)
     const start = std.time.nanoTimestamp();
-    var i: usize = 0;
-    while (i < total_items) : (i += 1) {
-        while (true) {
-            result.workers[8].send(i) catch |err| {
-                if (err == error.Full) {
-                    Thread.yield() catch {};
-                    continue;
-                }
-                std.debug.print("Producer error: {}\n", .{err});
-                return err;
-            };
-            break;
-        }
-    }
+
+    // Wait a bit for production to complete
+    Thread.sleep(100 * std.time.ns_per_ms);
 
     // Signal done
-    done.store(true, .release);
+    production_done.store(true, .release);
 
-    // Wait for consumers
-    for (consumers) |consumer| {
-        consumer.join();
+    // Wait for all workers
+    for (workers) |worker| {
+        worker.join();
     }
 
     const end = std.time.nanoTimestamp();
 
     // Calculate statistics
-    var total: usize = 0;
+    var total_consumed: usize = 0;
     var min: usize = std.math.maxInt(usize);
     var max: usize = 0;
     for (&consumed_counts) |*count| {
         const c = count.load(.monotonic);
-        total += c;
+        total_consumed += c;
         min = @min(min, c);
         max = @max(max, c);
     }
 
     const elapsed_ns: u64 = @intCast(end - start);
-    const items_per_sec = (total * 1_000_000_000) / elapsed_ns;
+    const items_per_sec = (total_consumed * 1_000_000_000) / elapsed_ns;
 
-    std.debug.print("Total items:  {d}\n", .{total_items});
-    std.debug.print("Consumed:     {d}\n", .{total});
-    std.debug.print("Elapsed:      ", .{});
+    std.debug.print("Total items:     {d}\n", .{total_items});
+    std.debug.print("Consumed:        {d}\n", .{total_consumed});
+    std.debug.print("Elapsed:         ", .{});
     formatNs(elapsed_ns);
-    std.debug.print("\nThroughput:   {d} items/sec\n", .{items_per_sec});
+    std.debug.print("\nThroughput:      {d} items/sec\n", .{items_per_sec});
     std.debug.print("\nLoad Distribution:\n", .{});
     std.debug.print("  Min:  {d} items\n", .{min});
     std.debug.print("  Max:  {d} items\n", .{max});
-    std.debug.print("  Avg:  {d} items\n", .{total / 8});
+    std.debug.print("  Avg:  {d} items\n", .{total_consumed / 8});
 
     // Print individual counts
-    std.debug.print("  Per-consumer: ", .{});
+    std.debug.print("  Per-worker: ", .{});
     for (&consumed_counts, 0..) |*count, idx| {
         std.debug.print("{d}", .{count.load(.monotonic)});
         if (idx < 7) std.debug.print(", ", .{});
@@ -385,15 +389,16 @@ fn bench1P8CLoadBalancing() !void {
 }
 
 pub fn main() !void {
-    std.debug.print("\n╔═══════════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║   DequeChannel Performance Benchmarks    ║\n", .{});
-    std.debug.print("╚═══════════════════════════════════════════════════╝\n", .{});
+    std.debug.print("\n╔═══════════════════════════════════════════════════════════╗\n", .{});
+    std.debug.print("║  DequeChannel Performance Benchmarks (V2)        ║\n", .{});
+    std.debug.print("║  Pattern: Each worker is BOTH producer AND consumer     ║\n", .{});
+    std.debug.print("╚═══════════════════════════════════════════════════════════╝\n", .{});
 
-    try benchSendRecvSingleThread();
-    try bench4P4C();
+    try benchSingleWorkerProducerConsumer();
+    try bench4WorkersProducerConsumer();
     // COMMENTED OUT: 8+ thread benchmarks
-    // try bench8P8C();
-    // try bench1P8CLoadBalancing();
+    // try bench8WorkersProducerConsumer();
+    // try benchWorkStealingImbalanced();
 
     std.debug.print("\n✓ All benchmarks completed\n\n", .{});
 }

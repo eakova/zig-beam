@@ -10,7 +10,10 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
     return struct {
         const Self = @This();
 
-        pub const Participant = ebr.Participant;
+        /// Re-export EBR types for convenience
+        pub const Collector = ebr.Collector;
+        pub const Guard = ebr.Guard;
+        pub const ThreadHandle = ebr.ThreadHandle;
 
         const Segment = struct {
             queue: *InnerQueue,
@@ -21,9 +24,14 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
         head_segment: std.atomic.Value(*Segment) align(std.atomic.cache_line),
         tail_segment: std.atomic.Value(*Segment) align(std.atomic.cache_line),
         allocator: Allocator,
-        ebr_global: *ebr.GlobalEpoch,
+        collector: *Collector,
 
-        pub fn init(allocator: Allocator) !Self {
+        /// Initialize a new SegmentedQueue with the given allocator and EBR collector.
+        ///
+        /// The collector must outlive the queue. Threads using this queue must
+        /// register with the collector via `collector.registerThread()` before
+        /// calling enqueue/dequeue operations.
+        pub fn init(allocator: Allocator, collector: *Collector) !Self {
             const first_seg = try allocator.create(Segment);
             errdefer allocator.destroy(first_seg);
 
@@ -39,7 +47,7 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
                 .head_segment = std.atomic.Value(*Segment).init(first_seg),
                 .tail_segment = std.atomic.Value(*Segment).init(first_seg),
                 .allocator = allocator,
-                .ebr_global = ebr.global(),
+                .collector = collector,
             };
         }
 
@@ -52,31 +60,6 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
                 current.allocator.destroy(current);
                 seg = next;
             }
-        }
-
-        /// Create a participant for use by a single thread.
-        pub fn createParticipant(self: *Self) !*Participant {
-            const allocator = self.allocator;
-            const p = try allocator.create(Participant);
-            p.* = Participant.init(allocator);
-
-            self.ebr_global.registerParticipant(p) catch {
-                allocator.destroy(p);
-                return error.TooManyThreads;
-            };
-
-            // Bind this participant to the current thread for the default EBR.
-            ebr.setThreadParticipant(p);
-
-            return p;
-        }
-
-        /// Destroy a previously created participant.
-        pub fn destroyParticipant(self: *Self, participant: *Participant) void {
-            participant.deinit(self.ebr_global);
-            self.ebr_global.unregisterParticipant(participant);
-            const allocator = participant.allocator;
-            allocator.destroy(participant);
         }
 
         /// Core enqueue logic extracted to eliminate duplication.
@@ -152,15 +135,15 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
         /// For better performance with multiple operations, use enqueue() with
         /// external guard management or enqueueMany() for batches.
         pub fn enqueueWithAutoGuard(self: *Self, item: T) !void {
-            var guard = ebr.pin();
-            defer guard.deinit();
+            const guard = self.collector.pin();
+            defer guard.unpin();
             return self.enqueue(item);
         }
 
         /// Primary dequeue API. Requires an active EBR guard.
         /// The caller must create an EBR guard before calling this method.
         /// Uses adaptive exponential backoff (Crossbeam-style) for intelligent retry.
-        pub fn dequeue(self: *Self, guard: *ebr.Guard) ?T {
+        pub fn dequeue(self: *Self) ?T {
             while (true) {
                 const head_seg = self.head_segment.load(.acquire);
 
@@ -181,12 +164,7 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
                         .acquire,
                     ) == null) {
                         // Successfully advanced, retire old segment via EBR
-                        const g = ebr.Garbage{
-                            .ptr = @ptrCast(head_seg),
-                            .destroy_fn = destroySegment,
-                            .epoch = 0,
-                        };
-                        guard.deferDestroy(g);
+                        self.collector.deferReclaim(@ptrCast(head_seg), destroySegment);
                     }
                     // Loop continues to try dequeue from new head segment
                     continue;
@@ -220,17 +198,17 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
         /// For better performance with multiple operations, use dequeue() with
         /// external guard management or dequeueMany() for batches.
         pub fn dequeueWithAutoGuard(self: *Self) ?T {
-            var guard = ebr.pin();
-            defer guard.deinit();
-            return self.dequeue(&guard);
+            const guard = self.collector.pin();
+            defer guard.unpin();
+            return self.dequeue();
         }
 
         /// Batch enqueue operation. Enqueues all items from the slice.
         /// Uses a single EBR guard for all operations, amortizing guard overhead.
         /// More efficient than calling enqueue() repeatedly for multiple items.
         pub fn enqueueMany(self: *Self, items: []const T) !void {
-            var guard = ebr.pin();
-            defer guard.deinit();
+            const guard = self.collector.pin();
+            defer guard.unpin();
 
             for (items) |item| {
                 try self.tryEnqueueItem(item);
@@ -242,8 +220,8 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
         /// More efficient than calling dequeue() repeatedly for multiple items.
         /// Returns the number of items actually dequeued (may be less than buffer size if queue empties).
         pub fn dequeueMany(self: *Self, buffer: []T) usize {
-            var guard = ebr.pin();
-            defer guard.deinit();
+            const guard = self.collector.pin();
+            defer guard.unpin();
 
             var count: usize = 0;
             for (buffer) |*slot| {
@@ -269,12 +247,7 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
                             .acquire,
                         ) == null) {
                             // Successfully advanced, retire old segment via EBR
-                            const g = ebr.Garbage{
-                                .ptr = @ptrCast(head_seg),
-                                .destroy_fn = destroySegment,
-                                .epoch = 0,
-                            };
-                            guard.deferDestroy(g);
+                            self.collector.deferReclaim(@ptrCast(head_seg), destroySegment);
                         }
                         // Loop continues to try dequeue from new head segment
                         continue;
@@ -307,10 +280,8 @@ pub fn SegmentedQueue(comptime T: type, comptime segment_capacity: usize) type {
             return count;
         }
 
-        fn destroySegment(ptr: *anyopaque, _allocator: Allocator) void {
-            _ = _allocator;
-            const aligned: *align(@alignOf(Segment)) anyopaque = @alignCast(ptr);
-            const seg: *Segment = @ptrCast(aligned);
+        fn destroySegment(ptr: *anyopaque) void {
+            const seg: *Segment = @ptrCast(@alignCast(ptr));
             seg.queue.deinit();
             seg.allocator.destroy(seg.queue);
             seg.allocator.destroy(seg);

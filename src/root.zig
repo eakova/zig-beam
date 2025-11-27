@@ -16,6 +16,7 @@ const spsc_queue = @import("spsc-queue");
 const segmented_queue = @import("beam-segmented-queue");
 const beam_task = @import("beam-task");
 const cache_padded = @import("beam-cache-padded");
+const ebr = @import("beam-ebr");
 
 // Public entry under a single namespace. Consumers use:
 // const beam = @import("zigbeam");
@@ -53,4 +54,7 @@ pub const Libs = struct {
 
     // CachePadded - Cache-line aware padding helpers
     pub const CachePadded = cache_padded.CachePadded;
+
+    // EBR - Epoch-Based Reclamation
+    pub const Ebr = ebr;
 };
