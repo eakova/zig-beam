@@ -24,6 +24,32 @@ const sum = loom.par_iter(data).reduce(Reducer(i64).sum());
 
 Same result. All cores utilized. No manual thread management.
 
+## Quick Reference
+
+| Function | Description |
+|----------|-------------|
+| `par_iter(slice)` | Parallel iterator over mutable slice. Chain with `.map()`, `.filter()`, `.reduce()`, `.for_each()`. |
+| `par_iter_const(slice)` | Parallel iterator over const slice. Same operations as `par_iter`. |
+| `par_range(start, end)` | Zero-allocation parallel range iterator. Ideal for index-based parallelism. |
+| `join(fn_a, args_a, fn_b, args_b)` | Fork-join: run two functions in parallel, return both results. |
+| `scope(body_fn)` | Structured concurrency: spawn dynamic tasks, all complete before scope exits. |
+| `ThreadPool.init(alloc, config)` | Create thread pool with configurable thread count and backoff. |
+| `getGlobalPool()` | Get or create the default global thread pool. |
+| `.for_each(fn)` | Apply function to each element in parallel. |
+| `.reduce(Reducer)` | Combine all elements using thread-local accumulation. |
+| `.map(T, fn, alloc)` | Transform elements in parallel, return new slice. |
+| `.filter(pred, alloc)` | Select matching elements in parallel. |
+| `.find(pred)` | Find first element matching predicate. |
+| `.count(pred)` | Count elements matching predicate. |
+| `.any(pred)` / `.all(pred)` | Check if any/all elements match predicate. |
+| `.withContext(&ctx)` | Pass shared context to parallel operations. |
+| `.withMinChunk(n)` | Set minimum chunk size before parallelizing. |
+| `Reducer(T).sum()` | Built-in reducer for summation. |
+| `Reducer(T).product()` | Built-in reducer for multiplication. |
+| `Reducer(T).min()` / `.max()` | Built-in reducers for min/max. |
+
+For detailed examples, see [FAQ](docs/FAQ.md) and [samples](samples/).
+
 ## Overview
 
 Loom provides Rayon-like data parallelism with a layered architecture: primitives (Deque, DequeChannel), thread pool infrastructure, fork-join primitives, and parallel iterators.
