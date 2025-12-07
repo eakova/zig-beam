@@ -82,7 +82,7 @@ Loom provides Rayon-like data parallelism with a layered architecture: primitive
     +----------------+
 
 
-Layer 4: par_iter()    -> Parallel iterators (map, reduce, filter, for_each)
+Layer 4: par_iter/par_range -> Parallel iterators (map, reduce, filter, for_each)
 Layer 3: join/scope    -> Fork-join primitives (structured concurrency)
 Layer 2: ThreadPool    -> Work-stealing thread pool
 Layer 1: Deque/Channel -> Lock-free primitives (from beam libs)
